@@ -1,0 +1,32 @@
+modLoader = "javafml"
+loaderVersion = "[47,)"
+license = "All Rights Reserved"
+
+[[mods]]
+modId = "vortexview"
+version = "1.0.0"
+displayName = "Vortex View"
+description = '''
+Add-on for Adventures in Time (AIT Forger). Adds a button to the AIT monitor that opens a time vortex view with your TARDIS flying through it, and auto-completes flight events while you watch, even with the stabilisers off.
+'''
+
+[[dependencies.vortexview]]
+modId = "forge"
+mandatory = true
+versionRange = "[47,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.vortexview]]
+modId = "minecraft"
+mandatory = true
+versionRange = "[1.20.1,1.21)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.vortexview]]
+modId = "ait"
+mandatory = false
+versionRange = "*"
+ordering = "AFTER"
+side = "BOTH"
