@@ -22,6 +22,12 @@ No AIT jar is needed to build: the add-on talks to AIT through reflection.
 - `autoCompleteWhileViewing` (true): turn the auto-complete off if you only want the visuals.
 - `autoCompleteDelayTicks` (30): how long the event shows before it completes itself.
 - `showHud` (true): flight status text over the vortex.
+- `tardisSpinSpeed` (1.0), `tardisWobble` (1.0), `tardisTumbles` (true): how the TARDIS moves in the vortex.
+
+## Checking auto-complete
+When you open the view, `logs/latest.log` gets a line "opened the vortex view of TARDIS ...". When a flight
+event is completed you get "Auto-completing flight event ...". If something goes wrong the add-on tells you in
+chat ("[Vortex View] Could not auto-complete ...") and logs the full error.
 
 ## If something looks wrong
 Errors are logged once to `logs/latest.log` with the prefix `VortexView` / "Vortex view:".

@@ -1,6 +1,7 @@
 package com.personal.vortexview;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -12,7 +13,34 @@ import java.util.Map;
 public final class AitBridge {
     private static final Map<String, Method> CACHE = new HashMap<>();
 
+    /** A class loader that is known to see AiT (remembered when the client first touches an AiT object). */
+    private static volatile ClassLoader aitLoader;
+
     private AitBridge() {
+    }
+
+    public static void rememberLoader(Object aitObject) {
+        if (aitObject != null) aitLoader = aitObject.getClass().getClassLoader();
+    }
+
+    /** Looks an AiT class up through every loader that might see it. */
+    public static Class<?> findClass(String name) throws ClassNotFoundException {
+        ClassLoader[] loaders = {
+                aitLoader,
+                AitBridge.class.getClassLoader(),
+                Thread.currentThread().getContextClassLoader(),
+                ClassLoader.getSystemClassLoader()
+        };
+        ClassNotFoundException last = null;
+        for (ClassLoader l : loaders) {
+            if (l == null) continue;
+            try {
+                return Class.forName(name, true, l);
+            } catch (ClassNotFoundException e) {
+                last = e;
+            }
+        }
+        throw last == null ? new ClassNotFoundException(name) : last;
     }
 
     /** Calls an instance method found by name and argument types. */
@@ -37,7 +65,12 @@ public final class AitBridge {
 
     /** Calls a static method of a class that is loaded by the same loader as {@code loaderSource}. */
     public static Object callStatic(Object loaderSource, String className, String name, Object... args) throws Exception {
-        Class<?> cls = Class.forName(className, true, loaderSource.getClass().getClassLoader());
+        Class<?> cls;
+        try {
+            cls = Class.forName(className, true, loaderSource.getClass().getClassLoader());
+        } catch (ClassNotFoundException e) {
+            cls = findClass(className);
+        }
         Method m = find(cls, name, args);
         return m.invoke(null, args);
     }
@@ -67,6 +100,7 @@ public final class AitBridge {
             boolean ok = true;
             for (int i = 0; i < p.length && ok; i++) ok = accepts(p[i], args[i]);
             if (!ok) continue;
+            m = publicVersion(cls, m);
             try {
                 m.setAccessible(true);
             } catch (Throwable ignored) {
@@ -77,6 +111,25 @@ public final class AitBridge {
             return m;
         }
         throw new NoSuchMethodException(cls.getName() + "#" + name + " with " + args.length + " args");
+    }
+
+    /** If the method lives in a non-public class, find the same method on a public parent type. */
+    private static Method publicVersion(Class<?> cls, Method m) {
+        if (Modifier.isPublic(m.getDeclaringClass().getModifiers())) return m;
+        java.util.ArrayDeque<Class<?>> queue = new java.util.ArrayDeque<>();
+        queue.add(cls);
+        while (!queue.isEmpty()) {
+            Class<?> c = queue.poll();
+            if (Modifier.isPublic(c.getModifiers())) {
+                try {
+                    return c.getMethod(m.getName(), m.getParameterTypes());
+                } catch (NoSuchMethodException ignored) {
+                }
+            }
+            if (c.getSuperclass() != null) queue.add(c.getSuperclass());
+            queue.addAll(java.util.Arrays.asList(c.getInterfaces()));
+        }
+        return m;
     }
 
     private static boolean accepts(Class<?> param, Object arg) {

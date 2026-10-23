@@ -34,14 +34,20 @@ public final class AutoFlightEvents {
     private static final Map<UUID, UUID> VIEWERS = new ConcurrentHashMap<>();
     /** tardis uuid -> ticks the current event has been waiting */
     private static final Map<UUID, Integer> WAITING = new HashMap<>();
-    private static boolean warned = false;
+    /** players already told about an auto-complete problem during this viewing session */
+    private static final java.util.Set<UUID> REPORTED = ConcurrentHashMap.newKeySet();
 
     private AutoFlightEvents() {
     }
 
     public static void setViewing(ServerPlayer player, UUID tardis, boolean open) {
-        if (open) VIEWERS.put(player.getUUID(), tardis);
-        else VIEWERS.remove(player.getUUID());
+        if (open) {
+            VIEWERS.put(player.getUUID(), tardis);
+            REPORTED.remove(player.getUUID());
+            VortexViewMod.LOGGER.info("{} opened the vortex view of TARDIS {}", player.getGameProfile().getName(), tardis);
+        } else {
+            VIEWERS.remove(player.getUUID());
+        }
     }
 
     @SubscribeEvent
@@ -65,16 +71,21 @@ public final class AutoFlightEvents {
             try {
                 handle(server, player, entry.getValue());
             } catch (Throwable t) {
-                if (!warned) {
-                    warned = true;
-                    VortexViewMod.LOGGER.error("Could not auto-complete flight events (AiT changed?)", t);
+                Throwable root = t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null ? t.getCause() : t;
+                if (REPORTED.add(player.getUUID())) {
+                    VortexViewMod.LOGGER.error("Could not auto-complete a flight event", t);
+                    player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                            "[Vortex View] Could not auto-complete the flight event: " + root
+                                    + " (details in logs/latest.log)"));
                 }
+                // Give up on this event so it does not spam; the next one gets a fresh try.
+                WAITING.remove(entry.getValue());
             }
         }
     }
 
     private static void handle(MinecraftServer server, ServerPlayer player, UUID tardisId) throws Exception {
-        Class<?> managerClass = Class.forName(TARDIS_MANAGER, true, AutoFlightEvents.class.getClassLoader());
+        Class<?> managerClass = AitBridge.findClass(TARDIS_MANAGER);
         Object manager = managerClass.getMethod("getInstance").invoke(null);
         Object tardis = AitBridge.call(manager, "demandTardis", server, tardisId);
         if (tardis == null) return;
@@ -92,6 +103,8 @@ public final class AutoFlightEvents {
 
         Object sequence = AitBridge.call(sequences, "getActiveSequence");
         List<?> controls = new ArrayList<>((List<?>) AitBridge.call(sequence, "getControls"));
+        VortexViewMod.LOGGER.info("Auto-completing flight event {} ({} controls) for {}",
+                AitBridge.tryCall(sequence, "id"), controls.size(), player.getGameProfile().getName());
 
         // Press each control in order, exactly like a player at the console would.
         for (Object control : controls) {

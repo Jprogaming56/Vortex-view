@@ -52,6 +52,7 @@ public class VortexViewScreen extends Screen {
         super(Component.translatable("screen." + VortexViewMod.MOD_ID + ".title"));
         this.parent = parent;
         this.tardis = tardis;
+        AitBridge.rememberLoader(tardis);
         this.tardisId = (UUID) AitBridge.call(tardis, "getUuid");
     }
 
@@ -191,26 +192,48 @@ public class VortexViewScreen extends Screen {
         }
     }
 
+    /**
+     * Total angle (degrees) of a flip that happens once per {@code period} ticks and takes
+     * {@code duration} ticks, eased in and out. It only ever grows, so it never snaps back.
+     */
+    private static float flipAngle(float t, float period, float duration, float offset) {
+        float shifted = t + offset;
+        int done = (int) Math.floor(shifted / period);
+        float into = shifted - done * period;
+        float p = Mth.clamp(into / duration, 0f, 1f);
+        float eased = p * p * (3f - 2f * p);
+        return 360f * (done + eased);
+    }
+
     private void renderTardis(PoseStack ps, float t) throws Exception {
         Minecraft mc = Minecraft.getInstance();
+        float spin = VortexConfig.SPIN_SPEED.get().floatValue();
+        float wobble = VortexConfig.WOBBLE.get().floatValue();
+        boolean tumbles = VortexConfig.TUMBLES.get();
 
-        // Path: a slow figure-eight drift with some depth, so it swoops toward and away from you.
-        float x = 2.4f * Mth.sin(t * 0.031f) + 0.7f * Mth.sin(t * 0.077f);
-        float y = 1.2f * Mth.sin(t * 0.043f + 1.0f) + 0.4f * Mth.cos(t * 0.09f);
-        float z = -7.5f + 2.0f * Mth.sin(t * 0.021f);
+        // Where it is: a lazy swooping path across the tunnel that also pushes in and out of
+        // the screen, so it seems to be hurtling along the vortex rather than hovering.
+        float x = wobble * (2.6f * Mth.sin(t * 0.027f) + 0.9f * Mth.sin(t * 0.071f + 0.6f));
+        float y = wobble * (1.5f * Mth.sin(t * 0.039f + 1.0f) + 0.5f * Mth.cos(t * 0.083f));
+        float z = -6.8f + wobble * 2.2f * Mth.sin(t * 0.019f);
 
-        // It banks into the turns, and tumbles on every axis at different speeds.
-        float vx = 2.4f * 0.031f * Mth.cos(t * 0.031f) + 0.7f * 0.077f * Mth.cos(t * 0.077f);
-        float bank = -vx * 140f;
-        float pitch = 22f * Mth.sin(t * 0.019f) + t * 0.35f;
-        float yaw = t * 1.1f;
-        float roll = 18f * Mth.sin(t * 0.027f) + bank;
+        // It leans into the sideways drift like a ship banking through a turn.
+        float vx = wobble * (2.6f * 0.027f * Mth.cos(t * 0.027f) + 0.9f * 0.071f * Mth.cos(t * 0.071f + 0.6f));
+        float bank = -vx * 160f;
+
+        // How it points. In the show the TARDIS spins steadily about its own vertical axis
+        // while it rocks and nods through the vortex, and every so often it tumbles end over end.
+        float yaw = t * 3.1f * spin;
+        float nod = wobble * (21f * Mth.sin(t * 0.052f) + 7f * Mth.sin(t * 0.131f));
+        float rock = wobble * (15f * Mth.sin(t * 0.037f + 1.2f)) + bank;
+        float flipX = tumbles ? flipAngle(t, 300f, 60f, 70f) : 0f;
+        float flipZ = tumbles ? flipAngle(t, 520f, 75f, 260f) : 0f;
 
         ps.pushPose();
         ps.translate(x, y, z);
+        ps.mulPose(Axis.XP.rotationDegrees(nod + flipX));
+        ps.mulPose(Axis.ZP.rotationDegrees(rock + flipZ));
         ps.mulPose(Axis.YP.rotationDegrees(yaw));
-        ps.mulPose(Axis.XP.rotationDegrees(pitch));
-        ps.mulPose(Axis.ZP.rotationDegrees(roll));
         // AIT models are built upside-down (like all entity models) and stand on the origin.
         ps.mulPose(Axis.ZP.rotationDegrees(180f));
         ps.translate(0f, bedrock ? 1.25f : 0.95f, 0f);
