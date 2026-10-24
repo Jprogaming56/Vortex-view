@@ -5,7 +5,9 @@ import com.personal.vortexview.VortexViewMod;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraftforge.api.distmarker.Dist;
+import com.personal.vortexview.VortexConfig;
 import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraftforge.client.event.sound.PlaySoundEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -27,6 +29,15 @@ public final class ClientEvents {
         int x = screen.width / 2 - 18;
         int y = screen.height / 2 - 71;
         event.addListener(new VortexButton(x, y, 30, 12, () -> open(screen)));
+    }
+
+    @SubscribeEvent
+    public static void onPlaySound(PlaySoundEvent event) {
+        if (!VortexConfig.MUTE_EVENT_SOUNDS.get()) return;
+        if (!(Minecraft.getInstance().screen instanceof VortexViewScreen)) return;
+        if (event.getOriginalSound() != null && EventSounds.isMuted(event.getOriginalSound().getLocation())) {
+            event.setSound(null);
+        }
     }
 
     private static boolean isMonitor(Screen screen) {

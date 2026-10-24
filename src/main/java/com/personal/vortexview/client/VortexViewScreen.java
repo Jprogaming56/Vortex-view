@@ -1,5 +1,6 @@
 package com.personal.vortexview.client;
 
+import com.mojang.blaze3d.shaders.FogShape;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -8,8 +9,11 @@ import com.mojang.math.Axis;
 import com.personal.vortexview.AitBridge;
 import com.personal.vortexview.VortexConfig;
 import com.personal.vortexview.VortexViewMod;
+import com.personal.vortexview.net.LandingPacket;
 import com.personal.vortexview.net.ViewPacket;
 import com.personal.vortexview.net.VortexNet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -21,19 +25,36 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.EmptyBlockGetter;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.state.BlockState;
+import com.mojang.blaze3d.platform.Lighting;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
 
 /**
  * Full-screen time vortex. The vortex tunnel is AiT's own (using whatever vortex style the
  * TARDIS has selected), and the TARDIS is drawn with its current exterior, drifting, banking
- * and tumbling through it.
+ * and tumbling through it. When the flight ends, the view cuts to the landing site and shows the
+ * TARDIS materialising there.
  */
 public class VortexViewScreen extends Screen {
     private static final String ITEM_REGISTRY = "dev.amble.ait.registry.impl.exterior.ClientExteriorVariantRegistry";
     private static final String RENDER_LAYERS = "dev.amble.ait.client.renderers.AITRenderLayers";
     private static final String[] RENDER_NAMES = {"m_7695_", "renderToBuffer"};
     private static final int FULL_BRIGHT = 15728880;
+
+    /** Timeline of the landing scene, in ticks. */
+    private static final int FLASH_TICKS = 14;
+    private static final int MAT_START = 24;
+    private static final int MAT_TICKS = 100;
+    private static final int LINGER_TICKS = 70;
+
+    private record Cell(int x, int y, int z, BlockState state) {
+    }
 
     private final Screen parent;
     private final Object tardis;
@@ -47,6 +68,10 @@ public class VortexViewScreen extends Screen {
     private boolean broken;
     private int refreshIn;
     private int noticeTicks;
+
+    private LandingPacket landing;
+    private List<Cell> cells = List.of();
+    private int landingTicks;
 
     public VortexViewScreen(Screen parent, Object tardis) throws Exception {
         super(Component.translatable("screen." + VortexViewMod.MOD_ID + ".title"));
@@ -88,10 +113,80 @@ public class VortexViewScreen extends Screen {
     public void tick() {
         if (noticeTicks > 0) noticeTicks--;
         if (--refreshIn <= 0) refreshExterior();
+        if (landing != null) {
+            landingTicks++;
+            // Took off again while the landing scene was up: back to the vortex.
+            if (landingTicks > 60) {
+                String state = travelState();
+                if ("DEMAT".equals(state) || "FLIGHT".equals(state)) {
+                    landing = null;
+                    cells = List.of();
+                    return;
+                }
+            }
+            if (VortexConfig.CLOSE_AFTER_LANDING.get() && landingTicks > MAT_START + MAT_TICKS + LINGER_TICKS) {
+                onClose();
+            }
+        }
     }
 
     public void showEventNotice() {
         noticeTicks = 70;
+    }
+
+    /** The flight ended: switch to the landing scene built from the server's snapshot. */
+    public void startLanding(LandingPacket packet) {
+        if (landing != null) return;
+        List<Cell> visible = new ArrayList<>();
+        try {
+            if (packet.radius() > 0) {
+                BlockState[] states = new BlockState[packet.cells().length];
+                for (int i = 0; i < states.length; i++) {
+                    int id = packet.cells()[i];
+                    BlockState s = id < 0 ? null : Block.BLOCK_STATE_REGISTRY.byId(id);
+                    states[i] = s == null ? Blocks.AIR.defaultBlockState() : s;
+                }
+                int r = packet.radius();
+                for (int x = -r; x <= r; x++) {
+                    for (int z = -r; z <= r; z++) {
+                        for (int y = packet.yMin(); y <= packet.yMax(); y++) {
+                            BlockState s = states[packet.index(x, y, z)];
+                            if (s.isAir() || s.getRenderShape() != RenderShape.MODEL) continue;
+                            if (buried(packet, states, x, y, z)) continue;
+                            visible.add(new Cell(x, y, z, s));
+                        }
+                    }
+                }
+            } else {
+                // No snapshot: a plain grass platform to land on.
+                BlockState grass = Blocks.GRASS_BLOCK.defaultBlockState();
+                for (int x = -8; x <= 8; x++) {
+                    for (int z = -8; z <= 8; z++) visible.add(new Cell(x, -1, z, grass));
+                }
+            }
+        } catch (Throwable t) {
+            VortexViewMod.LOGGER.error("Vortex view: could not build the landing scene", t);
+            return;
+        }
+        if (visible.isEmpty()) {
+            BlockState grass = Blocks.GRASS_BLOCK.defaultBlockState();
+            for (int x = -8; x <= 8; x++) {
+                for (int z = -8; z <= 8; z++) visible.add(new Cell(x, -1, z, grass));
+            }
+        }
+        cells = visible;
+        landing = packet;
+        landingTicks = 0;
+    }
+
+    private static boolean buried(LandingPacket p, BlockState[] states, int x, int y, int z) {
+        int[][] d = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        for (int[] o : d) {
+            int nx = x + o[0], ny = y + o[1], nz = z + o[2];
+            if (Math.abs(nx) > p.radius() || Math.abs(nz) > p.radius() || ny < p.yMin() || ny > p.yMax()) return false;
+            if (!states[p.index(nx, ny, nz)].isSolidRender(EmptyBlockGetter.INSTANCE, BlockPos.ZERO)) return false;
+        }
+        return true;
     }
 
     // ---------------------------------------------------------------- data
@@ -120,28 +215,44 @@ public class VortexViewScreen extends Screen {
 
     // ---------------------------------------------------------------- render
 
+    @FunctionalInterface
+    private interface Body {
+        void run() throws Exception;
+    }
+
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        g.fill(0, 0, width, height, 0xFF000000);
+        if (landing != null) {
+            float[] top = skyTop();
+            float[] bottom = skyHorizon();
+            g.fillGradient(0, 0, width, height, argb(top), argb(bottom));
+        } else {
+            g.fill(0, 0, width, height, 0xFF000000);
+        }
         g.flush();
 
-        if (!broken || vortex != null) {
-            try {
-                renderScene(partialTick);
-            } catch (Throwable t) {
-                fail("scene", t);
+        try {
+            if (landing != null) {
+                renderLandingScene(partialTick);
+            } else if (!broken || vortex != null) {
+                renderVortexScene(partialTick);
             }
+        } catch (Throwable t) {
+            fail("scene", t);
+        }
+
+        if (landing != null && landingTicks < FLASH_TICKS) {
+            float a = 1f - (landingTicks + partialTick) / FLASH_TICKS;
+            g.fill(0, 0, width, height, ((int) (Mth.clamp(a, 0f, 1f) * 255) << 24) | 0xFFFFFF);
         }
 
         renderOverlay(g);
         super.render(g, mouseX, mouseY, partialTick);
     }
 
-    private void renderScene(float partialTick) throws Exception {
+    /** Sets up a perspective 3D pass over the GUI, runs the body, and puts everything back. */
+    private void in3D(Body body) throws Exception {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return;
-        float t = mc.player.tickCount + partialTick;
-
         Matrix4f oldProjection = RenderSystem.getProjectionMatrix();
         VertexSorting oldSorting = RenderSystem.getVertexSorting();
         PoseStack modelView = RenderSystem.getModelViewStack();
@@ -162,6 +273,29 @@ public class VortexViewScreen extends Screen {
         mc.gameRenderer.lightTexture().turnOnLightLayer();
 
         try {
+            body.run();
+        } finally {
+            mc.gameRenderer.lightTexture().turnOffLightLayer();
+            RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+            FogRenderer.setupNoFog();
+            RenderSystem.enableCull();
+            RenderSystem.setProjectionMatrix(oldProjection, oldSorting);
+            modelView.popPose();
+            RenderSystem.applyModelViewMatrix();
+            RenderSystem.depthFunc(GL11.GL_LEQUAL);
+            RenderSystem.disableBlend();
+            RenderSystem.defaultBlendFunc();
+        }
+    }
+
+    // ---- vortex
+
+    private void renderVortexScene(float partialTick) throws Exception {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return;
+        float t = mc.player.tickCount + partialTick;
+
+        in3D(() -> {
             PoseStack ps = new PoseStack();
 
             // The whole shot sways a little, like a handheld camera in the show.
@@ -179,17 +313,8 @@ public class VortexViewScreen extends Screen {
                 ps.popPose();
             }
 
-            if (model != null && texture != null) renderTardis(ps, t);
-        } finally {
-            mc.gameRenderer.lightTexture().turnOffLightLayer();
-            RenderSystem.enableCull();
-            RenderSystem.setProjectionMatrix(oldProjection, oldSorting);
-            modelView.popPose();
-            RenderSystem.applyModelViewMatrix();
-            RenderSystem.depthFunc(GL11.GL_LEQUAL);
-            RenderSystem.disableBlend();
-            RenderSystem.defaultBlendFunc();
-        }
+            if (model != null && texture != null) renderVortexTardis(ps, t);
+        });
     }
 
     /**
@@ -205,8 +330,7 @@ public class VortexViewScreen extends Screen {
         return 360f * (done + eased);
     }
 
-    private void renderTardis(PoseStack ps, float t) throws Exception {
-        Minecraft mc = Minecraft.getInstance();
+    private void renderVortexTardis(PoseStack ps, float t) throws Exception {
         float spin = VortexConfig.SPIN_SPEED.get().floatValue();
         float wobble = VortexConfig.WOBBLE.get().floatValue();
         boolean tumbles = VortexConfig.TUMBLES.get();
@@ -237,19 +361,36 @@ public class VortexViewScreen extends Screen {
         // AIT models are built upside-down (like all entity models) and stand on the origin.
         ps.mulPose(Axis.ZP.rotationDegrees(180f));
         ps.translate(0f, bedrock ? 1.25f : 0.95f, 0f);
+        drawTardis(ps, 1f);
+        ps.popPose();
+    }
 
+    /** Draws the exterior model at the current pose; alpha below 1 uses the see-through layer. */
+    private void drawTardis(PoseStack ps, float alpha) throws Exception {
+        if (alpha <= 0.01f) return;
+        Minecraft mc = Minecraft.getInstance();
         MultiBufferSource.BufferSource buffers = mc.renderBuffers().bufferSource();
-        VertexConsumer base = buffers.getBuffer(RenderType.entityCutoutNoCull(texture));
-        AitBridge.callAny(model, RENDER_NAMES, ps, base, FULL_BRIGHT, OverlayTexture.NO_OVERLAY, 1f, 1f, 1f, 1f);
+
+        RenderType base = alpha >= 0.999f ? RenderType.entityCutoutNoCull(texture) : RenderType.entityTranslucent(texture);
+        VertexConsumer vc = buffers.getBuffer(base);
+        AitBridge.callAny(model, RENDER_NAMES, ps, vc, FULL_BRIGHT, OverlayTexture.NO_OVERLAY, 1f, 1f, 1f, alpha);
         buffers.endBatch();
 
         if (emission != null && hasPower()) {
             RenderType glow = (RenderType) AitBridge.callStatic(tardis, RENDER_LAYERS, "tardisEmissiveCullZOffset", emission, true);
             VertexConsumer glowBuffer = buffers.getBuffer(glow);
-            AitBridge.callAny(model, RENDER_NAMES, ps, glowBuffer, FULL_BRIGHT, OverlayTexture.NO_OVERLAY, 1f, 1f, 1f, 1f);
+            AitBridge.callAny(model, RENDER_NAMES, ps, glowBuffer, FULL_BRIGHT, OverlayTexture.NO_OVERLAY, 1f, 1f, 1f, alpha);
             buffers.endBatch();
         }
-        ps.popPose();
+    }
+
+    private String travelState() {
+        try {
+            Object state = AitBridge.call(AitBridge.call(tardis, "travel"), "getState");
+            return state instanceof Enum<?> e ? e.name() : String.valueOf(state);
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     private boolean hasPower() {
@@ -258,12 +399,131 @@ public class VortexViewScreen extends Screen {
         return has == null || (Boolean) has;
     }
 
+    // ---- landing
+
+    private void renderLandingScene(float partialTick) throws Exception {
+        float lt = landingTicks + partialTick;
+        float day = daylight();
+        float[] horizon = skyHorizon();
+
+        in3D(() -> {
+            Minecraft mc = Minecraft.getInstance();
+
+            // Distant parts of the little snapshot fade into the sky so its edges never show.
+            RenderSystem.setShaderFogShape(FogShape.SPHERE);
+            RenderSystem.setShaderFogStart(7.5f);
+            RenderSystem.setShaderFogEnd(12.5f);
+            RenderSystem.setShaderFogColor(horizon[0], horizon[1], horizon[2]);
+            RenderSystem.setShaderColor(day, day, day, 1f);
+            Lighting.setupFor3DItems();
+
+            // Camera: starts wide, drifts in toward the TARDIS and slowly orbits it.
+            float ease = Mth.clamp(lt / 160f, 0f, 1f);
+            ease = ease * ease * (3f - 2f * ease);
+            float dist = Mth.lerp(ease, 9.5f, 6.0f);
+            float eyeH = Mth.lerp(ease, 3.2f, 1.6f);
+            float face = (float) Math.toRadians(landing.rotation() + 20f * Mth.sin(lt * 0.012f));
+            float cx = 0.5f, cy = 1.0f, cz = 0.5f;
+            float ex = cx + dist * Mth.sin(face);
+            float ey = eyeH;
+            float ez = cz + dist * Mth.cos(face);
+
+            float dx = cx - ex, dy = cy - ey, dz = cz - ez;
+            float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+            float pitch = (float) Math.toDegrees(Math.atan2(-dy, Math.sqrt(dx * dx + dz * dz)));
+
+            PoseStack ps = new PoseStack();
+            ps.mulPose(Axis.XP.rotationDegrees(pitch));
+            ps.mulPose(Axis.YP.rotationDegrees(yaw + 180f));
+            ps.translate(-ex, -ey, -ez);
+
+            // The ground and whatever stands around the landing spot.
+            MultiBufferSource.BufferSource buffers = mc.renderBuffers().bufferSource();
+            for (Cell c : cells) {
+                ps.pushPose();
+                ps.translate(c.x(), c.y(), c.z());
+                mc.getBlockRenderer().renderSingleBlock(c.state(), ps, buffers, FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
+                ps.popPose();
+            }
+            buffers.endBatch();
+
+            // The TARDIS fades in with the pulsing flicker of a materialisation.
+            if (model != null && texture != null) {
+                float p = Mth.clamp((lt - MAT_START) / MAT_TICKS, 0f, 1f);
+                float pulse = 0.5f + 0.5f * Mth.sin(lt * (0.9f + 1.6f * p));
+                float alpha = p >= 1f ? 1f : Mth.clamp(p * 1.2f - (1f - pulse) * (1f - p) * 0.9f, 0f, 1f);
+                RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+                ps.pushPose();
+                ps.translate(0.5f, 0f, 0.5f);
+                ps.mulPose(Axis.YP.rotationDegrees(180f + landing.rotation()));
+                ps.mulPose(Axis.ZP.rotationDegrees(180f));
+                ps.translate(0f, bedrock ? 0.3f : 0f, 0f);
+                RenderSystem.enableBlend();
+                RenderSystem.defaultBlendFunc();
+                drawTardis(ps, alpha);
+                ps.popPose();
+            }
+        });
+    }
+
+    // ---- sky colours for the landing scene
+
+    private float timeOfDay() {
+        return (float) (landing.dayTime() % 24000L) / 24000f;
+    }
+
+    /** 1 at noon, 0 at deep night (smoothed). */
+    private float daylight() {
+        String dim = landing.dimension();
+        if (dim.endsWith("the_nether") || dim.endsWith("the_end")) return 0.8f;
+        float h = Mth.cos((timeOfDay() - 0.25f) * Mth.TWO_PI); // 1 at noon, -1 at midnight
+        float f = Mth.clamp((h + 0.25f) / 0.75f, 0f, 1f);
+        f = f * f * (3f - 2f * f);
+        float rain = landing.raining() ? 0.75f : 1f;
+        return Mth.lerp(f, 0.28f, 1f) * rain;
+    }
+
+    private float[] skyTop() {
+        String dim = landing.dimension();
+        if (dim.endsWith("the_nether")) return new float[]{0.20f, 0.04f, 0.03f};
+        if (dim.endsWith("the_end")) return new float[]{0.04f, 0.02f, 0.08f};
+        float h = Mth.cos((timeOfDay() - 0.25f) * Mth.TWO_PI);
+        float f = Mth.clamp((h + 0.25f) / 0.75f, 0f, 1f);
+        float[] day = landing.raining() ? new float[]{0.45f, 0.5f, 0.58f} : new float[]{0.42f, 0.62f, 1.0f};
+        float[] night = {0.01f, 0.015f, 0.05f};
+        return new float[]{Mth.lerp(f, night[0], day[0]), Mth.lerp(f, night[1], day[1]), Mth.lerp(f, night[2], day[2])};
+    }
+
+    private float[] skyHorizon() {
+        String dim = landing.dimension();
+        if (dim.endsWith("the_nether")) return new float[]{0.35f, 0.08f, 0.05f};
+        if (dim.endsWith("the_end")) return new float[]{0.12f, 0.08f, 0.2f};
+        float h = Mth.cos((timeOfDay() - 0.25f) * Mth.TWO_PI);
+        float f = Mth.clamp((h + 0.25f) / 0.75f, 0f, 1f);
+        float[] day = landing.raining() ? new float[]{0.62f, 0.65f, 0.7f} : new float[]{0.74f, 0.85f, 1.0f};
+        float[] night = {0.03f, 0.04f, 0.1f};
+        float[] c = {Mth.lerp(f, night[0], day[0]), Mth.lerp(f, night[1], day[1]), Mth.lerp(f, night[2], day[2])};
+        // Warm glow near sunrise and sunset.
+        float glow = Mth.clamp(1f - Math.abs(h) * 3.5f, 0f, 1f) * (landing.raining() ? 0.3f : 1f);
+        c[0] = Mth.lerp(glow, c[0], 1.0f);
+        c[1] = Mth.lerp(glow, c[1], 0.58f);
+        c[2] = Mth.lerp(glow, c[2], 0.32f);
+        return c;
+    }
+
+    private static int argb(float[] c) {
+        return 0xFF000000
+                | ((int) (Mth.clamp(c[0], 0f, 1f) * 255) << 16)
+                | ((int) (Mth.clamp(c[1], 0f, 1f) * 255) << 8)
+                | (int) (Mth.clamp(c[2], 0f, 1f) * 255);
+    }
+
     // ---------------------------------------------------------------- overlay
 
     private void renderOverlay(GuiGraphics g) {
         var font = Minecraft.getInstance().font;
 
-        if (broken && vortex == null) {
+        if (broken && vortex == null && landing == null) {
             g.drawCenteredString(font, "Could not read the TARDIS from AIT (see latest.log)", width / 2, height / 2, 0xFFFF5555);
         }
 
@@ -278,7 +538,10 @@ public class VortexViewScreen extends Screen {
             }
         }
 
-        if (noticeTicks > 0) {
+        if (landing != null) {
+            g.drawCenteredString(font, landingTicks < MAT_START + MAT_TICKS ? "MATERIALISING" : "LANDED",
+                    width / 2, 12, 0xFFFFFFFF);
+        } else if (noticeTicks > 0) {
             int alpha = Math.min(255, noticeTicks * 12);
             int color = (alpha << 24) | 0x55FF99;
             g.drawCenteredString(font, Component.translatable("screen." + VortexViewMod.MOD_ID + ".event_done"),
@@ -286,8 +549,8 @@ public class VortexViewScreen extends Screen {
         }
     }
 
-    private java.util.List<String> statusLines() {
-        java.util.List<String> lines = new java.util.ArrayList<>();
+    private List<String> statusLines() {
+        List<String> lines = new ArrayList<>();
         try {
             Object travel = AitBridge.call(tardis, "travel");
             lines.add("STATE  " + AitBridge.call(travel, "getState"));

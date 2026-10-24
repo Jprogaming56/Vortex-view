@@ -18,5 +18,6 @@ public final class VortexNet {
                 () -> PROTOCOL, s -> true, s -> true);
         CHANNEL.registerMessage(0, ViewPacket.class, ViewPacket::encode, ViewPacket::decode, ViewPacket::handle);
         CHANNEL.registerMessage(1, NoticePacket.class, NoticePacket::encode, NoticePacket::decode, NoticePacket::handle);
+        CHANNEL.registerMessage(2, LandingPacket.class, LandingPacket::encode, LandingPacket::decode, LandingPacket::handle);
     }
 }

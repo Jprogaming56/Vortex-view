@@ -10,6 +10,9 @@ public final class VortexConfig {
     public static final ForgeConfigSpec.DoubleValue SPIN_SPEED;
     public static final ForgeConfigSpec.DoubleValue WOBBLE;
     public static final ForgeConfigSpec.BooleanValue TUMBLES;
+    public static final ForgeConfigSpec.BooleanValue MUTE_EVENT_SOUNDS;
+    public static final ForgeConfigSpec.BooleanValue SHOW_LANDING;
+    public static final ForgeConfigSpec.BooleanValue CLOSE_AFTER_LANDING;
 
     static {
         ForgeConfigSpec.Builder b = new ForgeConfigSpec.Builder();
@@ -21,6 +24,17 @@ public final class VortexConfig {
         AUTO_DELAY_TICKS = b
                 .comment("How long (in ticks, 20 = 1 second) a flight event stays on screen before it is auto-completed.")
                 .defineInRange("autoCompleteDelayTicks", 20, 0, 70);
+        MUTE_EVENT_SOUNDS = b
+                .comment("Silence the flight event alert and its success / fail sounds while the vortex view is open.")
+                .define("muteFlightEventSounds", true);
+        b.pop();
+        b.push("landing");
+        SHOW_LANDING = b
+                .comment("When the flight ends while the vortex view is open, show the TARDIS materialising at its landing spot.")
+                .define("showLandingScene", true);
+        CLOSE_AFTER_LANDING = b
+                .comment("Go back to the monitor automatically a few seconds after the TARDIS has materialised.")
+                .define("returnToMonitorAfterLanding", true);
         b.pop();
         b.push("client");
         SHOW_HUD = b
