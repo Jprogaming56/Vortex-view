@@ -42,8 +42,12 @@ public final class AutoFlightEvents {
     private static final Map<UUID, Integer> WAITING = new HashMap<>();
     /** player uuid -> last travel state seen for the TARDIS they are watching */
     private static final Map<UUID, String> LAST_STATE = new HashMap<>();
+    /** player uuid -> ticks the flight has been over without the TARDIS landing */
+    private static final Map<UUID, Integer> ARRIVED = new HashMap<>();
+    /** player uuid -> ticks since the TARDIS started rematerialising, until the landing snapshot is sent */
+    private static final Map<UUID, Integer> PENDING_SNAPSHOT = new HashMap<>();
     /** players already told about a problem during this viewing session */
-    private static final Set<UUID> REPORTED = ConcurrentHashMap.newKeySet();
+    private static final Set<String> REPORTED = ConcurrentHashMap.newKeySet();
 
     private AutoFlightEvents() {
     }
@@ -51,12 +55,16 @@ public final class AutoFlightEvents {
     public static void setViewing(ServerPlayer player, UUID tardis, boolean open) {
         if (open) {
             VIEWERS.put(player.getUUID(), tardis);
-            REPORTED.remove(player.getUUID());
+            REPORTED.removeIf(k -> k.startsWith(player.getUUID() + ":"));
             LAST_STATE.remove(player.getUUID());
+            ARRIVED.remove(player.getUUID());
+            PENDING_SNAPSHOT.remove(player.getUUID());
             VortexViewMod.LOGGER.info("{} opened the vortex view of TARDIS {}", player.getGameProfile().getName(), tardis);
         } else {
             VIEWERS.remove(player.getUUID());
             LAST_STATE.remove(player.getUUID());
+            ARRIVED.remove(player.getUUID());
+            PENDING_SNAPSHOT.remove(player.getUUID());
         }
     }
 
@@ -79,23 +87,46 @@ public final class AutoFlightEvents {
                 it.remove();
                 continue;
             }
+            Object tardis;
             try {
-                Object tardis = lookup(server, entry.getValue());
-                if (tardis == null) continue;
-                if (VortexConfig.AUTO_COMPLETE.get()) autoComplete(player, tardis, entry.getValue());
-                if (VortexConfig.SHOW_LANDING.get()) watchLanding(server, player, tardis);
+                tardis = lookup(server, entry.getValue());
             } catch (Throwable t) {
-                report(player, entry.getValue(), t);
+                report(player, entry.getValue(), "finding the TARDIS", t);
+                continue;
+            }
+            if (tardis == null) continue;
+
+            // Each stage is separate, so a problem in one never stops the others.
+            if (VortexConfig.AUTO_COMPLETE.get()) {
+                try {
+                    autoComplete(player, tardis, entry.getValue());
+                } catch (Throwable t) {
+                    report(player, entry.getValue(), "auto-completing the flight event", t);
+                }
+            }
+            if (VortexConfig.AUTO_LAND.get()) {
+                try {
+                    autoLand(player, tardis);
+                } catch (Throwable t) {
+                    report(player, entry.getValue(), "landing the TARDIS", t);
+                }
+            }
+            if (VortexConfig.SHOW_LANDING.get()) {
+                try {
+                    watchLanding(server, player, tardis);
+                } catch (Throwable t) {
+                    report(player, entry.getValue(), "showing the landing", t);
+                }
             }
         }
     }
 
-    private static void report(ServerPlayer player, UUID tardisId, Throwable t) {
+    private static void report(ServerPlayer player, UUID tardisId, String what, Throwable t) {
         Throwable root = t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null ? t.getCause() : t;
-        if (REPORTED.add(player.getUUID())) {
-            VortexViewMod.LOGGER.error("Vortex view problem", t);
+        if (REPORTED.add(player.getUUID() + ":" + what)) {
+            VortexViewMod.LOGGER.error("Vortex view problem while " + what, t);
             player.sendSystemMessage(Component.literal(
-                    "[Vortex View] Problem: " + root + " (details in logs/latest.log)"));
+                    "[Vortex View] Problem while " + what + ": " + root + " (details in logs/latest.log)"));
         }
         // Give up on this event so it does not spam; the next one gets a fresh try.
         WAITING.remove(tardisId);
@@ -143,18 +174,72 @@ public final class AutoFlightEvents {
 
     // ------------------------------------------------------------------ landing
 
+    private static String stateName(Object travel) throws Exception {
+        Object state = AitBridge.call(travel, "getState");
+        return state instanceof Enum<?> en ? en.name() : String.valueOf(state);
+    }
+
+    /**
+     * AiT does not land the TARDIS when the flight runs out; the pilot has to bring the throttle back
+     * to zero. While the vortex view is open nobody is at the console, so do exactly that for them:
+     * setting the speed to 0 makes AiT's own handler rematerialise the TARDIS.
+     */
+    private static void autoLand(ServerPlayer player, Object tardis) throws Exception {
+        Object travel = AitBridge.call(tardis, "travel");
+        UUID id = player.getUUID();
+
+        boolean over = "FLIGHT".equals(stateName(travel))
+                && ((Number) AitBridge.call(travel, "getTargetTicks")).intValue() == 0
+                && !Boolean.TRUE.equals(AitBridge.tryCall(travel, "isCrashing"));
+        if (!over) {
+            ARRIVED.remove(id);
+            return;
+        }
+        if (ARRIVED.merge(id, 1, Integer::sum) < VortexConfig.AUTO_LAND_DELAY_TICKS.get()) return;
+        ARRIVED.remove(id);
+
+        // Someone flying the TARDIS by hand (real flight) is in charge; leave it alone.
+        Object flight = AitBridge.tryCall(tardis, "flight");
+        if (flight != null && Boolean.TRUE.equals(AitBridge.tryCall(flight, "isFlying"))) return;
+
+        VortexViewMod.LOGGER.info("Flight is over, landing the TARDIS for {}", player.getGameProfile().getName());
+        AitBridge.call(travel, "speed", 0);
+        if ("FLIGHT".equals(stateName(travel))) AitBridge.call(travel, "rematerialize");
+    }
+
     private static void watchLanding(MinecraftServer server, ServerPlayer player, Object tardis) throws Exception {
         Object travel = AitBridge.call(tardis, "travel");
-        Object state = AitBridge.call(travel, "getState");
-        String now = state instanceof Enum<?> en ? en.name() : String.valueOf(state);
+        String now = stateName(travel);
         String before = LAST_STATE.put(player.getUUID(), now);
 
         // Flight just ended: the TARDIS is now rematerialising (or already landed).
         if ("FLIGHT".equals(before) && !"FLIGHT".equals(now) && !"DEMAT".equals(now)) {
-            VortexViewMod.LOGGER.info("Flight ended for {} (state {}), sending landing scene",
-                    player.getGameProfile().getName(), now);
-            VortexNet.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
-                    LandingSnapshot.take(server, travel));
+            PENDING_SNAPSHOT.put(player.getUUID(), 0);
+        }
+
+        Integer waited = PENDING_SNAPSHOT.get(player.getUUID());
+        if (waited == null) return;
+        PENDING_SNAPSHOT.put(player.getUUID(), waited + 1);
+
+        // AiT works out the final landing spot a moment after the state flips to MAT, so wait until
+        // the TARDIS' position has caught up with its destination before copying the surroundings.
+        boolean settled = waited >= 2 && positionSettled(travel);
+        if (!settled && waited < 120) return;
+
+        PENDING_SNAPSHOT.remove(player.getUUID());
+        VortexViewMod.LOGGER.info("TARDIS is materialising for {}, sending the landing scene",
+                player.getGameProfile().getName());
+        VortexNet.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), LandingSnapshot.take(server, travel));
+    }
+
+    private static boolean positionSettled(Object travel) {
+        try {
+            Object pos = AitBridge.call(travel, "position");
+            Object dest = AitBridge.call(travel, "destination");
+            return java.util.Objects.equals(AitBridge.call(pos, "getPos"), AitBridge.call(dest, "getPos"))
+                    && java.util.Objects.equals(AitBridge.tryCall(pos, "getDimension"), AitBridge.tryCall(dest, "getDimension"));
+        } catch (Throwable t) {
+            return true;
         }
     }
 }

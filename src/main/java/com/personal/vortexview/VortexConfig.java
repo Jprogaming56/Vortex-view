@@ -10,6 +10,8 @@ public final class VortexConfig {
     public static final ForgeConfigSpec.DoubleValue SPIN_SPEED;
     public static final ForgeConfigSpec.DoubleValue WOBBLE;
     public static final ForgeConfigSpec.BooleanValue TUMBLES;
+    public static final ForgeConfigSpec.BooleanValue AUTO_LAND;
+    public static final ForgeConfigSpec.IntValue AUTO_LAND_DELAY_TICKS;
     public static final ForgeConfigSpec.BooleanValue MUTE_EVENT_SOUNDS;
     public static final ForgeConfigSpec.BooleanValue SHOW_LANDING;
     public static final ForgeConfigSpec.BooleanValue CLOSE_AFTER_LANDING;
@@ -29,6 +31,13 @@ public final class VortexConfig {
                 .define("muteFlightEventSounds", true);
         b.pop();
         b.push("landing");
+        AUTO_LAND = b
+                .comment("While the vortex view is open, the TARDIS lands (rematerialises) by itself once the flight is over,",
+                        "as if the throttle had been pulled back to zero. Without this you would have to leave the view and land it by hand.")
+                .define("autoLandWhileViewing", true);
+        AUTO_LAND_DELAY_TICKS = b
+                .comment("How long (in ticks, 20 = 1 second) the TARDIS waits after the flight is over before it lands itself.")
+                .defineInRange("autoLandDelayTicks", 30, 0, 400);
         SHOW_LANDING = b
                 .comment("When the flight ends while the vortex view is open, show the TARDIS materialising at its landing spot.")
                 .define("showLandingScene", true);

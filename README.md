@@ -9,6 +9,9 @@ Personal add-on for Adventures in Time on Minecraft 1.20.1 Forge (AIT Forger 1.0
 - While the view is open, **flight events complete themselves**, with the stabilisers on or off. The add-on
   "presses" the event's controls in order through AIT's own sequence handler, so loyalty, sounds and
   particles behave as if a player had done it, and you can never miss one or crash from it.
+- When the flight runs out, the TARDIS **lands itself** while the view is open (AiT normally waits for the
+  throttle to be pulled back to zero, which nobody can do from inside the view). It does exactly that for
+  you, so AiT's own rematerialisation runs.
 - The flight event alert, success chime and fail thud are **muted** while the view is open (a small
   "Flight event auto-completed" note shows instead).
 - When the flight ends while the view is open, the vortex flashes out to the **landing site**: a copy of
@@ -27,6 +30,7 @@ No AIT jar is needed to build: the add-on talks to AIT through reflection.
 - `autoCompleteWhileViewing` (true): turn the auto-complete off if you only want the visuals.
 - `autoCompleteDelayTicks` (20): how long the event shows before it completes itself.
 - `muteFlightEventSounds` (true): silence the flight event sounds while the view is open.
+- `autoLandWhileViewing` (true) and `autoLandDelayTicks` (30): land the TARDIS by itself once the flight is over.
 - `showLandingScene` (true): show the arrival when the flight ends.
 - `returnToMonitorAfterLanding` (true): go back to the monitor a few seconds after it has landed.
 - `showHud` (true): flight status text over the vortex.
