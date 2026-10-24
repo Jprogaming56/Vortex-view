@@ -47,11 +47,11 @@ public class VortexViewScreen extends Screen {
     private static final String[] RENDER_NAMES = {"m_7695_", "renderToBuffer"};
     private static final int FULL_BRIGHT = 15728880;
 
-    /** Timeline of the landing scene, in ticks. */
+    /** Landing scene: white flash length, and how long it lingers once AiT says the TARDIS has landed. */
     private static final int FLASH_TICKS = 14;
-    private static final int MAT_START = 24;
-    private static final int MAT_TICKS = 100;
     private static final int LINGER_TICKS = 70;
+    /** Safety net in case the TARDIS never reports LANDED (for example after a crash). */
+    private static final int MAX_LANDING_TICKS = 600;
 
     private record Cell(int x, int y, int z, BlockState state) {
     }
@@ -72,6 +72,7 @@ public class VortexViewScreen extends Screen {
     private LandingPacket landing;
     private List<Cell> cells = List.of();
     private int landingTicks;
+    private int landedTicks;
 
     public VortexViewScreen(Screen parent, Object tardis) throws Exception {
         super(Component.translatable("screen." + VortexViewMod.MOD_ID + ".title"));
@@ -124,7 +125,9 @@ public class VortexViewScreen extends Screen {
                     return;
                 }
             }
-            if (VortexConfig.CLOSE_AFTER_LANDING.get() && landingTicks > MAT_START + MAT_TICKS + LINGER_TICKS) {
+            if ("LANDED".equals(travelState())) landedTicks++;
+            boolean done = landedTicks > LINGER_TICKS || landingTicks > MAX_LANDING_TICKS;
+            if (VortexConfig.CLOSE_AFTER_LANDING.get() && done) {
                 onClose();
             }
         }
@@ -177,6 +180,7 @@ public class VortexViewScreen extends Screen {
         cells = visible;
         landing = packet;
         landingTicks = 0;
+        landedTicks = 0;
     }
 
     private static boolean buried(LandingPacket p, BlockState[] states, int x, int y, int z) {
@@ -376,10 +380,12 @@ public class VortexViewScreen extends Screen {
         AitBridge.callAny(model, RENDER_NAMES, ps, vc, FULL_BRIGHT, OverlayTexture.NO_OVERLAY, 1f, 1f, 1f, alpha);
         buffers.endBatch();
 
-        if (emission != null && hasPower()) {
+        if (emission != null && alpha > 0.105f && hasPower()) {
             RenderType glow = (RenderType) AitBridge.callStatic(tardis, RENDER_LAYERS, "tardisEmissiveCullZOffset", emission, true);
             VertexConsumer glowBuffer = buffers.getBuffer(glow);
-            AitBridge.callAny(model, RENDER_NAMES, ps, glowBuffer, FULL_BRIGHT, OverlayTexture.NO_OVERLAY, 1f, 1f, 1f, alpha);
+            // AiT dims the glow along with the fade (colour = 1 - (1 - alpha)).
+            float c = Mth.clamp(alpha, 0f, 1f);
+            AitBridge.callAny(model, RENDER_NAMES, ps, glowBuffer, FULL_BRIGHT, OverlayTexture.NO_OVERLAY, c, c, c, alpha);
             buffers.endBatch();
         }
     }
@@ -447,16 +453,27 @@ public class VortexViewScreen extends Screen {
             }
             buffers.endBatch();
 
-            // The TARDIS fades in with the pulsing flicker of a materialisation.
+            // The TARDIS is drawn with AiT's own materialisation animation: the same fade, flicker,
+            // scale and spin the real exterior uses, read from the same animation clock. That keeps it in
+            // step with the real materialising sound, which starts when that animation does.
             if (model != null && texture != null) {
-                float p = Mth.clamp((lt - MAT_START) / MAT_TICKS, 0f, 1f);
-                float pulse = 0.5f + 0.5f * Mth.sin(lt * (0.9f + 1.6f * p));
-                float alpha = p >= 1f ? 1f : Mth.clamp(p * 1.2f - (1f - pulse) * (1f - p) * 0.9f, 0f, 1f);
+                Object travel = AitBridge.call(tardis, "travel");
+                float alpha = ((Number) AitBridge.call(travel, "getAlpha", partialTick)).floatValue();
+                org.joml.Vector3f offset = (org.joml.Vector3f) AitBridge.call(travel, "getAnimationPosition", partialTick);
+                org.joml.Vector3f turn = (org.joml.Vector3f) AitBridge.call(travel, "getAnimationRotation", partialTick);
+                org.joml.Vector3f scale = (org.joml.Vector3f) AitBridge.call(travel, "getScale", partialTick);
+
                 RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
                 ps.pushPose();
+                // Same order as AiT's ExteriorRenderer.
+                ps.translate(offset.x(), offset.y(), offset.z());
                 ps.translate(0.5f, 0f, 0.5f);
-                ps.mulPose(Axis.YP.rotationDegrees(180f + landing.rotation()));
-                ps.mulPose(Axis.ZP.rotationDegrees(180f));
+                ps.mulPose(Axis.XP.rotationDegrees(turn.z()));
+                ps.mulPose(Axis.YP.rotationDegrees(turn.y()));
+                ps.mulPose(Axis.ZP.rotationDegrees(turn.x()));
+                ps.scale(scale.x(), scale.y(), scale.z());
+                ps.mulPose(Axis.XP.rotationDegrees(180f));
+                ps.mulPose(Axis.YP.rotationDegrees(landing.rotation() + 180f));
                 ps.translate(0f, bedrock ? 0.3f : 0f, 0f);
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();
@@ -539,7 +556,7 @@ public class VortexViewScreen extends Screen {
         }
 
         if (landing != null) {
-            g.drawCenteredString(font, landingTicks < MAT_START + MAT_TICKS ? "MATERIALISING" : "LANDED",
+            g.drawCenteredString(font, "LANDED".equals(travelState()) ? "LANDED" : "MATERIALISING",
                     width / 2, 12, 0xFFFFFFFF);
         } else if (noticeTicks > 0) {
             int alpha = Math.min(255, noticeTicks * 12);

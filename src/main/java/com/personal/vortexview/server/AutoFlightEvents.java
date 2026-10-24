@@ -223,7 +223,7 @@ public final class AutoFlightEvents {
 
         // AiT works out the final landing spot a moment after the state flips to MAT, so wait until
         // the TARDIS' position has caught up with its destination before copying the surroundings.
-        boolean settled = waited >= 2 && positionSettled(travel);
+        boolean settled = waited >= 1 && positionSettled(travel);
         if (!settled && waited < 120) return;
 
         PENDING_SNAPSHOT.remove(player.getUUID());

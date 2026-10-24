@@ -16,7 +16,9 @@ Personal add-on for Adventures in Time on Minecraft 1.20.1 Forge (AIT Forger 1.0
   "Flight event auto-completed" note shows instead).
 - When the flight ends while the view is open, the vortex flashes out to the **landing site**: a copy of
   the blocks around where the TARDIS is arriving, with sky, time of day and weather to match, and your TARDIS
-  flickering into existence. If you take off again it goes back to the vortex.
+  materialising using AiT's own materialisation animation (the same fade, flicker and spin as the real exterior,
+  read from the same animation clock), so it stays in step with the real materialise sound. If you take off
+  again it goes back to the vortex.
 - ESC returns to the monitor. The view does not pause the game, so the flight carries on.
 
 ## Build (GitHub Actions)
