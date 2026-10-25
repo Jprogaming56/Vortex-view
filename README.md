@@ -10,8 +10,8 @@ Personal add-on for Adventures in Time on Minecraft 1.20.1 Forge (AIT Forger 1.0
     stays like this until you press it (or press ESC to go back to the monitor).
   - **DEMAT button:** takes off exactly like pulling the throttle with the handbrake off, so AiT's own
     dematerialisation runs (its sound, animation, fuel use and events). The TARDIS fades out using AiT's own
-    demat animation while the time vortex slowly fades in over the landing site, then the TARDIS flies on to its
-    destination.
+    demat animation, and the time vortex fades in over the landing site by exactly the amount the TARDIS has
+    faded (flicker smoothed out), so the two stay in step. Then the TARDIS flies on to its destination.
   - **In flight:** AiT's own vortex tunnel (whichever vortex style your TARDIS has selected) with your TARDIS
     drifting, banking and tumbling through it. It fades in as the vortex takes over.
 - While the view is open, **flight events complete themselves**, with the stabilisers on or off, and their alert
