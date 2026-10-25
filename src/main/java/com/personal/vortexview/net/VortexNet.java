@@ -6,7 +6,7 @@ import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 public final class VortexNet {
-    private static final String PROTOCOL = "1";
+    private static final String PROTOCOL = "2";
     public static SimpleChannel CHANNEL;
 
     private VortexNet() {
@@ -19,5 +19,6 @@ public final class VortexNet {
         CHANNEL.registerMessage(0, ViewPacket.class, ViewPacket::encode, ViewPacket::decode, ViewPacket::handle);
         CHANNEL.registerMessage(1, NoticePacket.class, NoticePacket::encode, NoticePacket::decode, NoticePacket::handle);
         CHANNEL.registerMessage(2, LandingPacket.class, LandingPacket::encode, LandingPacket::decode, LandingPacket::handle);
+        CHANNEL.registerMessage(3, DematPacket.class, DematPacket::encode, DematPacket::decode, DematPacket::handle);
     }
 }

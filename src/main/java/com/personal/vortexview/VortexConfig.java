@@ -15,6 +15,7 @@ public final class VortexConfig {
     public static final ForgeConfigSpec.BooleanValue MUTE_EVENT_SOUNDS;
     public static final ForgeConfigSpec.BooleanValue SHOW_LANDING;
     public static final ForgeConfigSpec.BooleanValue CLOSE_AFTER_LANDING;
+    public static final ForgeConfigSpec.IntValue CAMERA_OFFSET_DEGREES;
 
     static {
         ForgeConfigSpec.Builder b = new ForgeConfigSpec.Builder();
@@ -42,8 +43,13 @@ public final class VortexConfig {
                 .comment("When the flight ends while the vortex view is open, show the TARDIS materialising at its landing spot.")
                 .define("showLandingScene", true);
         CLOSE_AFTER_LANDING = b
-                .comment("Go back to the monitor automatically a few seconds after the TARDIS has materialised.")
-                .define("returnToMonitorAfterLanding", true);
+                .comment("Go back to the monitor by itself a few seconds after the TARDIS has materialised.",
+                        "Off by default: the view stays on the landing site until you press DEMAT (or ESC).")
+                .define("closeViewAfterLanding", false);
+        CAMERA_OFFSET_DEGREES = b
+                .comment("Where the camera starts around the TARDIS in the landing view.",
+                        "0 = straight in front of the door. Positive moves it round to the right (as you look at the door), negative to the left, 180 = behind.")
+                .defineInRange("landingCameraOffsetDegrees", 0, -180, 180);
         b.pop();
         b.push("client");
         SHOW_HUD = b

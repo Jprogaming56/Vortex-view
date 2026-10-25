@@ -22,7 +22,7 @@ final class LandingSnapshot {
     }
 
     @SuppressWarnings("unchecked")
-    static LandingPacket take(MinecraftServer server, Object travel) {
+    static LandingPacket take(MinecraftServer server, Object travel, boolean parked) {
         String dimension = "minecraft:overworld";
         long dayTime = 6000L;
         boolean raining = false;
@@ -40,7 +40,7 @@ final class LandingSnapshot {
                 Object key = AitBridge.tryCall(pos, "getDimension");
                 if (key instanceof ResourceKey<?> k) level = server.getLevel((ResourceKey<Level>) k);
             }
-            if (level == null) return LandingPacket.empty(dimension, dayTime, raining, rotation);
+            if (level == null) return LandingPacket.empty(dimension, dayTime, raining, rotation, parked);
 
             dimension = level.dimension().location().toString();
             dayTime = level.getDayTime();
@@ -59,10 +59,10 @@ final class LandingSnapshot {
                     }
                 }
             }
-            return new LandingPacket(dimension, dayTime, raining, rotation, RADIUS, -BELOW, ABOVE, cells);
+            return new LandingPacket(dimension, dayTime, raining, rotation, RADIUS, -BELOW, ABOVE, cells, parked);
         } catch (Throwable t) {
             VortexViewMod.LOGGER.warn("Could not snapshot the landing site; the client will use a plain platform", t);
-            return LandingPacket.empty(dimension, dayTime, raining, rotation);
+            return LandingPacket.empty(dimension, dayTime, raining, rotation, parked);
         }
     }
 

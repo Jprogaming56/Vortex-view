@@ -15,10 +15,11 @@ import net.minecraftforge.network.NetworkEvent;
  * radius 0 means "no snapshot available".
  */
 public record LandingPacket(String dimension, long dayTime, boolean raining, float rotation,
-                            int radius, int yMin, int yMax, int[] cells) {
+                            int radius, int yMin, int yMax, int[] cells, boolean parked) {
 
-    public static LandingPacket empty(String dimension, long dayTime, boolean raining, float rotation) {
-        return new LandingPacket(dimension, dayTime, raining, rotation, 0, 0, -1, new int[0]);
+    /** parked = the TARDIS was already sitting there when the view was opened (so no arrival flash). */
+    public static LandingPacket empty(String dimension, long dayTime, boolean raining, float rotation, boolean parked) {
+        return new LandingPacket(dimension, dayTime, raining, rotation, 0, 0, -1, new int[0], parked);
     }
 
     public int width() {
@@ -41,6 +42,7 @@ public record LandingPacket(String dimension, long dayTime, boolean raining, flo
         buf.writeVarInt(p.radius);
         buf.writeVarInt(p.yMin);
         buf.writeVarInt(p.yMax);
+        buf.writeBoolean(p.parked);
         // run-length encoded: (state id, run length) pairs
         int i = 0;
         int n = p.cells.length;
@@ -63,6 +65,7 @@ public record LandingPacket(String dimension, long dayTime, boolean raining, flo
         int radius = buf.readVarInt();
         int yMin = buf.readVarInt();
         int yMax = buf.readVarInt();
+        boolean parked = buf.readBoolean();
         int n = buf.readVarInt();
         int[] cells = new int[n];
         int i = 0;
@@ -71,7 +74,7 @@ public record LandingPacket(String dimension, long dayTime, boolean raining, flo
             int run = buf.readVarInt();
             for (int k = 0; k < run && i < n; k++) cells[i++] = id;
         }
-        return new LandingPacket(dim, time, rain, rot, radius, yMin, yMax, cells);
+        return new LandingPacket(dim, time, rain, rot, radius, yMin, yMax, cells, parked);
     }
 
     public static void handle(LandingPacket p, Supplier<NetworkEvent.Context> ctx) {

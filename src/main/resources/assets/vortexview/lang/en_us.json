@@ -3,5 +3,7 @@
   "screen.vortexview.button": "VORTEX",
   "screen.vortexview.button.tooltip": "Open the time vortex view",
   "screen.vortexview.exit": "Press ESC to return to the monitor",
-  "screen.vortexview.event_done": "Flight event auto-completed"
+  "screen.vortexview.event_done": "Flight event auto-completed",
+  "screen.vortexview.demat": "DEMATERIALISE",
+  "screen.vortexview.demat.tooltip": "Take off: the TARDIS dematerialises and flies on to its destination"
 }

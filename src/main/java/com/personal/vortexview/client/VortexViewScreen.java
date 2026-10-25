@@ -9,6 +9,7 @@ import com.mojang.math.Axis;
 import com.personal.vortexview.AitBridge;
 import com.personal.vortexview.VortexConfig;
 import com.personal.vortexview.VortexViewMod;
+import com.personal.vortexview.net.DematPacket;
 import com.personal.vortexview.net.LandingPacket;
 import com.personal.vortexview.net.ViewPacket;
 import com.personal.vortexview.net.VortexNet;
@@ -74,6 +75,15 @@ public class VortexViewScreen extends Screen {
     private int landingTicks;
     private int landedTicks;
 
+    /** Demat: ticks since the client saw the DEMAT state, and how long AiT's demat animation lasts. */
+    private int dematTicks;
+    private float dematDuration = -1f;
+    private static final float DEFAULT_DEMAT_TICKS = 160f;
+    /** Ticks since the view switched to the vortex, so the TARDIS can fade in there. */
+    private int vortexAge = 100;
+    private int clickCooldown;
+    private VortexButton dematButton;
+
     public VortexViewScreen(Screen parent, Object tardis) throws Exception {
         super(Component.translatable("screen." + VortexViewMod.MOD_ID + ".title"));
         this.parent = parent;
@@ -93,6 +103,18 @@ public class VortexViewScreen extends Screen {
             fail("vortex", t);
         }
         refreshExterior();
+
+        Component label = Component.translatable("screen." + VortexViewMod.MOD_ID + ".demat");
+        Component tip = Component.translatable("screen." + VortexViewMod.MOD_ID + ".demat.tooltip");
+        dematButton = addRenderableWidget(new VortexButton(width / 2 - 60, height - 46, 120, 22, label, tip, 1.0f,
+                this::pressDemat));
+        dematButton.visible = false;
+    }
+
+    private void pressDemat() {
+        if (clickCooldown > 0 || !"LANDED".equals(travelState())) return;
+        VortexNet.CHANNEL.sendToServer(new DematPacket(tardisId));
+        clickCooldown = 40; // if nothing happens by then (no power, cooldown) the button comes back
     }
 
     @Override
@@ -114,23 +136,67 @@ public class VortexViewScreen extends Screen {
     public void tick() {
         if (noticeTicks > 0) noticeTicks--;
         if (--refreshIn <= 0) refreshExterior();
+        if (clickCooldown > 0) clickCooldown--;
+
+        String state = travelState();
+        boolean landed = "LANDED".equals(state);
+
         if (landing != null) {
             landingTicks++;
-            // Took off again while the landing scene was up: back to the vortex.
-            if (landingTicks > 60) {
-                String state = travelState();
-                if ("DEMAT".equals(state) || "FLIGHT".equals(state)) {
-                    landing = null;
-                    cells = List.of();
-                    return;
+
+            if ("DEMAT".equals(state)) {
+                dematTicks++;
+                if (dematDuration < 0f) dematDuration = readDematDuration();
+            } else {
+                // Not dematerialising (yet, or the demat was cancelled).
+                dematTicks = 0;
+                dematDuration = -1f;
+            }
+
+            if ("FLIGHT".equals(state) && landingTicks > 40) {
+                // The TARDIS has left the ground: on to the vortex.
+                landing = null;
+                cells = List.of();
+                dematTicks = 0;
+                dematDuration = -1f;
+                vortexAge = 0;
+            } else {
+                if (landed) landedTicks++;
+                if (VortexConfig.CLOSE_AFTER_LANDING.get()
+                        && (landedTicks > LINGER_TICKS || landingTicks > MAX_LANDING_TICKS)) {
+                    onClose();
                 }
             }
-            if ("LANDED".equals(travelState())) landedTicks++;
-            boolean done = landedTicks > LINGER_TICKS || landingTicks > MAX_LANDING_TICKS;
-            if (VortexConfig.CLOSE_AFTER_LANDING.get() && done) {
-                onClose();
-            }
+        } else if (vortexAge < 1000) {
+            vortexAge++;
         }
+
+        if (dematButton != null) {
+            dematButton.visible = landed;
+            dematButton.active = landed && clickCooldown == 0;
+        }
+    }
+
+    /** How long AiT's current demat animation lasts, in ticks (read from the animation itself). */
+    private float readDematDuration() {
+        try {
+            Object holder = AitBridge.call(AitBridge.call(tardis, "travel"), "getAnimations");
+            Object current = AitBridge.field(holder, "current");
+            Object alphaTrack = AitBridge.field(current, "alpha");
+            float d = ((Number) AitBridge.call(alphaTrack, "duration")).floatValue();
+            if (d >= 20f && d <= 1200f) return d;
+        } catch (Throwable ignored) {
+            // The animation may not have been created yet; try again next tick.
+        }
+        return dematTicks > 10 ? DEFAULT_DEMAT_TICKS : -1f;
+    }
+
+    /** 0 while parked, rising smoothly to 1 as the TARDIS dematerialises. */
+    private float dematFade(float partialTick) {
+        if (landing == null || dematTicks == 0) return 0f;
+        float dur = dematDuration > 0f ? dematDuration : DEFAULT_DEMAT_TICKS;
+        float t = Mth.clamp((dematTicks + partialTick) / dur, 0f, 1f);
+        return t * t * (3f - 2f * t);
     }
 
     public void showEventNotice() {
@@ -179,8 +245,10 @@ public class VortexViewScreen extends Screen {
         }
         cells = visible;
         landing = packet;
-        landingTicks = 0;
+        landingTicks = packet.parked() ? 200 : 0;
         landedTicks = 0;
+        dematTicks = 0;
+        dematDuration = -1f;
     }
 
     private static boolean buried(LandingPacket p, BlockState[] states, int x, int y, int z) {
@@ -238,8 +306,10 @@ public class VortexViewScreen extends Screen {
         try {
             if (landing != null) {
                 renderLandingScene(partialTick);
+                float fade = dematFade(partialTick);
+                if (fade > 0.002f && vortex != null) renderVortexScene(partialTick, fade, false);
             } else if (!broken || vortex != null) {
-                renderVortexScene(partialTick);
+                renderVortexScene(partialTick, 1f, true);
             }
         } catch (Throwable t) {
             fail("scene", t);
@@ -294,7 +364,7 @@ public class VortexViewScreen extends Screen {
 
     // ---- vortex
 
-    private void renderVortexScene(float partialTick) throws Exception {
+    private void renderVortexScene(float partialTick, float alpha, boolean withTardis) throws Exception {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
         float t = mc.player.tickCount + partialTick;
@@ -308,6 +378,12 @@ public class VortexViewScreen extends Screen {
             ps.mulPose(Axis.YP.rotationDegrees(Mth.sin(t * 0.017f) * 3f));
 
             if (vortex != null) {
+                boolean fading = alpha < 0.999f;
+                if (fading) {
+                    RenderSystem.enableBlend();
+                    RenderSystem.defaultBlendFunc();
+                    RenderSystem.setShaderColor(1f, 1f, 1f, alpha);
+                }
                 ps.pushPose();
                 ps.mulPose(Axis.ZP.rotationDegrees(t * 1.4f));
                 ps.translate(0f, 0f, 500f);
@@ -315,9 +391,14 @@ public class VortexViewScreen extends Screen {
                 AitBridge.call(vortex, "renderVortexLayer", ps, 1.5f);
                 AitBridge.call(vortex, "renderVortexLayer", ps, 2.5f);
                 ps.popPose();
+                if (fading) RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
             }
 
-            if (model != null && texture != null) renderVortexTardis(ps, t);
+            if (withTardis && model != null && texture != null) {
+                // Fades in when it first arrives in the vortex after taking off.
+                float intro = Mth.clamp((vortexAge + partialTick) / 30f, 0f, 1f);
+                renderVortexTardis(ps, t, intro);
+            }
         });
     }
 
@@ -334,7 +415,7 @@ public class VortexViewScreen extends Screen {
         return 360f * (done + eased);
     }
 
-    private void renderVortexTardis(PoseStack ps, float t) throws Exception {
+    private void renderVortexTardis(PoseStack ps, float t, float alpha) throws Exception {
         float spin = VortexConfig.SPIN_SPEED.get().floatValue();
         float wobble = VortexConfig.WOBBLE.get().floatValue();
         boolean tumbles = VortexConfig.TUMBLES.get();
@@ -365,7 +446,9 @@ public class VortexViewScreen extends Screen {
         // AIT models are built upside-down (like all entity models) and stand on the origin.
         ps.mulPose(Axis.ZP.rotationDegrees(180f));
         ps.translate(0f, bedrock ? 1.25f : 0.95f, 0f);
-        drawTardis(ps, 1f);
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        drawTardis(ps, alpha);
         ps.popPose();
     }
 
@@ -428,7 +511,10 @@ public class VortexViewScreen extends Screen {
             ease = ease * ease * (3f - 2f * ease);
             float dist = Mth.lerp(ease, 9.5f, 6.0f);
             float eyeH = Mth.lerp(ease, 3.2f, 1.6f);
-            float face = (float) Math.toRadians(landing.rotation() + 20f * Mth.sin(lt * 0.012f));
+            // Start in front of the door (AiT's rotation points the door a quarter turn from the block's
+            // facing), plus the player's own offset from the config, and a slow drift around it.
+            float face = (float) Math.toRadians(landing.rotation() - 90f
+                    + VortexConfig.CAMERA_OFFSET_DEGREES.get() + 20f * Mth.sin(lt * 0.012f));
             float cx = 0.5f, cy = 1.0f, cz = 0.5f;
             float ex = cx + dist * Mth.sin(face);
             float ey = eyeH;
@@ -556,7 +642,9 @@ public class VortexViewScreen extends Screen {
         }
 
         if (landing != null) {
-            g.drawCenteredString(font, "LANDED".equals(travelState()) ? "LANDED" : "MATERIALISING",
+            String st = travelState();
+            String label = "LANDED".equals(st) ? "LANDED" : "DEMAT".equals(st) ? "DEMATERIALISING" : "MATERIALISING";
+            g.drawCenteredString(font, label,
                     width / 2, 12, 0xFFFFFFFF);
         } else if (noticeTicks > 0) {
             int alpha = Math.min(255, noticeTicks * 12);

@@ -212,6 +212,18 @@ public final class AutoFlightEvents {
         String now = stateName(travel);
         String before = LAST_STATE.put(player.getUUID(), now);
 
+        // Opened the view while the TARDIS is parked: show where it is standing, no arrival effects.
+        if (before == null && "LANDED".equals(now)) {
+            VortexViewMod.LOGGER.info("TARDIS is parked, sending the landing view for {}", player.getGameProfile().getName());
+            VortexNet.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), LandingSnapshot.take(server, travel, true));
+            return;
+        }
+
+        // Opened the view mid-materialisation: treat it like an arrival.
+        if (before == null && "MAT".equals(now)) {
+            PENDING_SNAPSHOT.put(player.getUUID(), 0);
+        }
+
         // Flight just ended: the TARDIS is now rematerialising (or already landed).
         if ("FLIGHT".equals(before) && !"FLIGHT".equals(now) && !"DEMAT".equals(now)) {
             PENDING_SNAPSHOT.put(player.getUUID(), 0);
@@ -229,7 +241,38 @@ public final class AutoFlightEvents {
         PENDING_SNAPSHOT.remove(player.getUUID());
         VortexViewMod.LOGGER.info("TARDIS is materialising for {}, sending the landing scene",
                 player.getGameProfile().getName());
-        VortexNet.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), LandingSnapshot.take(server, travel));
+        VortexNet.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), LandingSnapshot.take(server, travel, false));
+    }
+
+    /**
+     * The DEMAT button: take off exactly like pulling the throttle with the handbrake off. AiT's own
+     * handler then runs the real dematerialisation (sound, animation, fuel, events). Only works for a
+     * player who has this TARDIS's vortex view open, and only while the TARDIS is parked.
+     */
+    public static void requestDemat(ServerPlayer player, UUID tardisId) {
+        if (!tardisId.equals(VIEWERS.get(player.getUUID()))) return;
+        try {
+            Object tardis = lookup(player.getServer(), tardisId);
+            if (tardis == null) return;
+            Object travel = AitBridge.call(tardis, "travel");
+            if (!"LANDED".equals(stateName(travel))) return;
+
+            VortexViewMod.LOGGER.info("{} pressed DEMAT in the vortex view", player.getGameProfile().getName());
+
+            // Throttle up as far as the TARDIS allows (stabilisers off limit it, like at the console).
+            Object maxValue = AitBridge.call(travel, "maxSpeed");
+            int max = Math.max(1, ((Number) AitBridge.call(maxValue, "get")).intValue());
+            AitBridge.call(travel, "handbrake", false);
+            if ("LANDED".equals(stateName(travel))) AitBridge.call(travel, "speed", max);
+            if ("LANDED".equals(stateName(travel))) AitBridge.tryCall(travel, "dematerialize");
+
+            if ("LANDED".equals(stateName(travel))) {
+                player.sendSystemMessage(Component.literal(
+                        "[Vortex View] The TARDIS could not dematerialise (no power, or still cooling down)."));
+            }
+        } catch (Throwable t) {
+            report(player, tardisId, "dematerialising", t);
+        }
     }
 
     private static boolean positionSettled(Object travel) {

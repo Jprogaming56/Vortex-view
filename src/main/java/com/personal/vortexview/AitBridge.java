@@ -75,6 +75,20 @@ public final class AitBridge {
         return m.invoke(null, args);
     }
 
+    /** Reads a (possibly private or inherited) field by name. */
+    public static Object field(Object target, String name) throws Exception {
+        if (target == null) throw new IllegalStateException("null target for field " + name);
+        for (Class<?> c = target.getClass(); c != null; c = c.getSuperclass()) {
+            try {
+                java.lang.reflect.Field f = c.getDeclaredField(name);
+                f.setAccessible(true);
+                return f.get(target);
+            } catch (NoSuchFieldException ignored) {
+            }
+        }
+        throw new NoSuchFieldException(target.getClass().getName() + "#" + name);
+    }
+
     /** Safe variant: returns null instead of throwing. */
     public static Object tryCall(Object target, String name, Object... args) {
         try {
