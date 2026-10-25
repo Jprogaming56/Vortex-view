@@ -50,6 +50,8 @@ public class VortexViewScreen extends Screen {
 
     /** Landing scene: white flash length, and how long it lingers once AiT says the TARDIS has landed. */
     private static final int FLASH_TICKS = 14;
+    /** How long the TARDIS takes to materialise inside the vortex after take-off. */
+    private static final int VORTEX_MAT_TICKS = 110;
     private static final int LINGER_TICKS = 70;
     /** Safety net in case the TARDIS never reports LANDED (for example after a crash). */
     private static final int MAX_LANDING_TICKS = 600;
@@ -75,16 +77,8 @@ public class VortexViewScreen extends Screen {
     private int landingTicks;
     private int landedTicks;
 
-    /** Demat: ticks since the client saw the DEMAT state, and how long AiT's demat animation lasts. */
-    private int dematTicks;
-    private float dematDuration = -1f;
-    private static final float DEFAULT_DEMAT_TICKS = 160f;
-    /** Lowest TARDIS opacity AiT's demat animation has reached so far, and the smoothed vortex fade. */
-    private float minAlpha = 1f;
-    private float fadePrev;
-    private float fadeNow;
-    /** Ticks since the view switched to the vortex, so the TARDIS can fade in there. */
-    private int vortexAge = 100;
+    /** Ticks since the view cut to the vortex after take-off, so the TARDIS can materialise there. */
+    private int vortexAge = 1000;
     private int clickCooldown;
     private VortexButton dematButton;
 
@@ -148,45 +142,11 @@ public class VortexViewScreen extends Screen {
         if (landing != null) {
             landingTicks++;
 
-            if ("DEMAT".equals(state)) {
-                dematTicks++;
-                if (dematDuration < 0f) dematDuration = readDematDuration();
-
-                // The vortex follows the TARDIS: as AiT's own demat animation fades the exterior out
-                // (flicker and all), the vortex comes in by the same amount, so the two stay in step.
-                float a = readAlpha();
-                if (!Float.isNaN(a)) minAlpha = Math.min(minAlpha, a);
-                float target;
-                if (minAlpha < 0.999f) {
-                    target = 1f - minAlpha;
-                } else if (dematTicks > 60) {
-                    // The animation is not reporting an opacity: fall back to a plain timed fade.
-                    float dur = dematDuration > 0f ? dematDuration : DEFAULT_DEMAT_TICKS;
-                    float t = Mth.clamp((dematTicks - 60) / Math.max(20f, dur - 60f), 0f, 1f);
-                    target = t * t * (3f - 2f * t);
-                } else {
-                    target = 0f;
-                }
-                fadePrev = fadeNow;
-                fadeNow += (target - fadeNow) * 0.35f; // smooths out the flicker
-            } else {
-                // Not dematerialising (yet, or the demat was cancelled).
-                dematTicks = 0;
-                dematDuration = -1f;
-                minAlpha = 1f;
-                fadePrev = 0f;
-                fadeNow = 0f;
-            }
-
             if ("FLIGHT".equals(state) && landingTicks > 40) {
-                // The TARDIS has left the ground: on to the vortex.
+                // The TARDIS finished dematerialising and is gone: cut to the vortex, where it
+                // materialises (see renderVortexScene).
                 landing = null;
                 cells = List.of();
-                dematTicks = 0;
-                dematDuration = -1f;
-                minAlpha = 1f;
-                fadePrev = 0f;
-                fadeNow = 0f;
                 vortexAge = 0;
             } else {
                 if (landed) landedTicks++;
@@ -203,35 +163,6 @@ public class VortexViewScreen extends Screen {
             dematButton.visible = landed;
             dematButton.active = landed && clickCooldown == 0;
         }
-    }
-
-    /** How long AiT's current demat animation lasts, in ticks (read from the animation itself). */
-    private float readDematDuration() {
-        try {
-            Object holder = AitBridge.call(AitBridge.call(tardis, "travel"), "getAnimations");
-            Object current = AitBridge.field(holder, "current");
-            Object alphaTrack = AitBridge.field(current, "alpha");
-            float d = ((Number) AitBridge.call(alphaTrack, "duration")).floatValue();
-            if (d >= 20f && d <= 1200f) return d;
-        } catch (Throwable ignored) {
-            // The animation may not have been created yet; try again next tick.
-        }
-        return dematTicks > 10 ? DEFAULT_DEMAT_TICKS : -1f;
-    }
-
-    /** The TARDIS's current opacity from AiT's animation, or NaN if it cannot be read. */
-    private float readAlpha() {
-        try {
-            return ((Number) AitBridge.call(AitBridge.call(tardis, "travel"), "getAlpha", 0f)).floatValue();
-        } catch (Throwable t) {
-            return Float.NaN;
-        }
-    }
-
-    /** 0 while parked, rising to 1 in step with the TARDIS fading out. */
-    private float dematFade(float partialTick) {
-        if (landing == null || dematTicks == 0) return 0f;
-        return Mth.clamp(Mth.lerp(partialTick, fadePrev, fadeNow), 0f, 1f);
     }
 
     public void showEventNotice() {
@@ -282,11 +213,6 @@ public class VortexViewScreen extends Screen {
         landing = packet;
         landingTicks = packet.parked() ? 200 : 0;
         landedTicks = 0;
-        dematTicks = 0;
-        dematDuration = -1f;
-        minAlpha = 1f;
-        fadePrev = 0f;
-        fadeNow = 0f;
     }
 
     private static boolean buried(LandingPacket p, BlockState[] states, int x, int y, int z) {
@@ -344,17 +270,19 @@ public class VortexViewScreen extends Screen {
         try {
             if (landing != null) {
                 renderLandingScene(partialTick);
-                float fade = dematFade(partialTick);
-                if (fade > 0.002f && vortex != null) renderVortexScene(partialTick, fade, false);
             } else if (!broken || vortex != null) {
-                renderVortexScene(partialTick, 1f, true);
+                renderVortexScene(partialTick);
             }
         } catch (Throwable t) {
             fail("scene", t);
         }
 
+        // A short white flash hides the cut: into the landing site on arrival, into the vortex on take-off.
         if (landing != null && landingTicks < FLASH_TICKS) {
             float a = 1f - (landingTicks + partialTick) / FLASH_TICKS;
+            g.fill(0, 0, width, height, ((int) (Mth.clamp(a, 0f, 1f) * 255) << 24) | 0xFFFFFF);
+        } else if (landing == null && vortexAge < FLASH_TICKS) {
+            float a = 1f - (vortexAge + partialTick) / FLASH_TICKS;
             g.fill(0, 0, width, height, ((int) (Mth.clamp(a, 0f, 1f) * 255) << 24) | 0xFFFFFF);
         }
 
@@ -402,7 +330,7 @@ public class VortexViewScreen extends Screen {
 
     // ---- vortex
 
-    private void renderVortexScene(float partialTick, float alpha, boolean withTardis) throws Exception {
+    private void renderVortexScene(float partialTick) throws Exception {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
         float t = mc.player.tickCount + partialTick;
@@ -416,12 +344,6 @@ public class VortexViewScreen extends Screen {
             ps.mulPose(Axis.YP.rotationDegrees(Mth.sin(t * 0.017f) * 3f));
 
             if (vortex != null) {
-                boolean fading = alpha < 0.999f;
-                if (fading) {
-                    RenderSystem.enableBlend();
-                    RenderSystem.defaultBlendFunc();
-                    RenderSystem.setShaderColor(1f, 1f, 1f, alpha);
-                }
                 ps.pushPose();
                 ps.mulPose(Axis.ZP.rotationDegrees(t * 1.4f));
                 ps.translate(0f, 0f, 500f);
@@ -429,15 +351,23 @@ public class VortexViewScreen extends Screen {
                 AitBridge.call(vortex, "renderVortexLayer", ps, 1.5f);
                 AitBridge.call(vortex, "renderVortexLayer", ps, 2.5f);
                 ps.popPose();
-                if (fading) RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
             }
 
-            if (withTardis && model != null && texture != null) {
-                // Fades in when it first arrives in the vortex after taking off.
-                float intro = Mth.clamp((vortexAge + partialTick) / 30f, 0f, 1f);
-                renderVortexTardis(ps, t, intro);
-            }
+            if (model != null && texture != null) renderVortexTardis(ps, t, vortexTardisAlpha(partialTick));
         });
+    }
+
+    /**
+     * Opacity of the TARDIS inside the vortex. Right after take-off it materialises into the vortex with
+     * the same pulsing flicker as a materialisation; after that (or if the view was opened mid-flight) it
+     * is simply solid.
+     */
+    private float vortexTardisAlpha(float partialTick) {
+        float age = vortexAge + partialTick;
+        float p = Mth.clamp(age / VORTEX_MAT_TICKS, 0f, 1f);
+        if (p >= 1f) return 1f;
+        float pulse = 0.5f + 0.5f * Mth.sin(age * (0.9f + 1.6f * p));
+        return Mth.clamp(p * 1.2f - (1f - pulse) * (1f - p) * 0.9f, 0f, 1f);
     }
 
     /**
