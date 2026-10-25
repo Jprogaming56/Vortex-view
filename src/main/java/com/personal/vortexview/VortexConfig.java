@@ -16,6 +16,7 @@ public final class VortexConfig {
     public static final ForgeConfigSpec.BooleanValue SHOW_LANDING;
     public static final ForgeConfigSpec.BooleanValue CLOSE_AFTER_LANDING;
     public static final ForgeConfigSpec.IntValue CAMERA_OFFSET_DEGREES;
+    public static final ForgeConfigSpec.DoubleValue LANDING_HEIGHT_OFFSET;
 
     static {
         ForgeConfigSpec.Builder b = new ForgeConfigSpec.Builder();
@@ -50,6 +51,9 @@ public final class VortexConfig {
                 .comment("Where the camera starts around the TARDIS in the landing view.",
                         "0 = straight in front of the door. Positive moves it round to the right (as you look at the door), negative to the left, 180 = behind.")
                 .defineInRange("landingCameraOffsetDegrees", 0, -180, 180);
+        LANDING_HEIGHT_OFFSET = b
+                .comment("Extra height, in blocks, for the TARDIS in the landing view. 0 = standing exactly on the ground. Raise it if it still looks sunk.")
+                .defineInRange("landingTardisHeightOffset", 0.0, -2.0, 3.0);
         b.pop();
         b.push("client");
         SHOW_HUD = b

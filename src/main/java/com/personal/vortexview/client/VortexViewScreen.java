@@ -528,7 +528,11 @@ public class VortexViewScreen extends Screen {
                 ps.scale(scale.x(), scale.y(), scale.z());
                 ps.mulPose(Axis.XP.rotationDegrees(180f));
                 ps.mulPose(Axis.YP.rotationDegrees(landing.rotation() + 180f));
-                ps.translate(0f, bedrock ? 0.3f : 0f, 0f);
+                // World-space lift (user adjustable), then AiT's own model scale and lift (PoliceBoxModel:
+                // scale 0.63, translate 0,-1.5,0) so the box stands on the floor instead of sinking into it.
+                ps.translate(0f, -VortexConfig.LANDING_HEIGHT_OFFSET.get().floatValue(), 0f);
+                ps.scale(0.63f, 0.63f, 0.63f);
+                ps.translate(0f, -1.5f, 0f);
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();
                 drawTardis(ps, alpha);

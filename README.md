@@ -36,6 +36,8 @@ No AIT jar is needed to build: the add-on talks to AIT through reflection.
 - `showLandingScene` (true): show the landing site instead of the vortex when the TARDIS is parked/landing.
 - `closeViewAfterLanding` (false): go back to the monitor by itself after landing. Off by default so the
   view stays on the landing site until you press DEMATERIALISE.
+- `landingTardisHeightOffset` (0): extra height in blocks for the TARDIS in the landing view. The model is now drawn with
+  AiT's own scale and lift so it stands on the ground; raise this if it still looks sunk.
 - `landingCameraOffsetDegrees` (0): where the camera starts around the TARDIS. 0 = straight in front of the
   door, positive moves it round to the right (as you look at the door), negative to the left, 180 = behind.
 - `showHud` (true): flight status text over the view.
