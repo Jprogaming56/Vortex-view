@@ -81,6 +81,10 @@ public class VortexViewScreen extends Screen {
     private int vortexAge = 1000;
     private int clickCooldown;
     private VortexButton dematButton;
+    /** Player-controlled orbit (degrees) and zoom for the landed view. */
+    private float camYaw;
+    private float camZoom = 1f;
+    private boolean canOrbit;
 
     public VortexViewScreen(Screen parent, Object tardis) throws Exception {
         super(Component.translatable("screen." + VortexViewMod.MOD_ID + ".title"));
@@ -126,6 +130,33 @@ public class VortexViewScreen extends Screen {
     }
 
     @Override
+    public boolean mouseDragged(double mx, double my, int button, double dx, double dy) {
+        if (canOrbit && button == 0 && !(dematButton != null && dematButton.isMouseOver(mx, my))) {
+            camYaw -= (float) dx * 0.6f;
+            return true;
+        }
+        return super.mouseDragged(mx, my, button, dx, dy);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mx, double my, double delta) {
+        if (canOrbit) {
+            camZoom = Mth.clamp(camZoom - (float) delta * 0.1f, 0.5f, 2.0f);
+            return true;
+        }
+        return super.mouseScrolled(mx, my, delta);
+    }
+
+    @Override
+    public boolean keyPressed(int key, int scan, int mods) {
+        if (canOrbit && (key == 263 || key == 262)) { // left / right arrow
+            camYaw += key == 263 ? -8f : 8f;
+            return true;
+        }
+        return super.keyPressed(key, scan, mods);
+    }
+
+    @Override
     public boolean isPauseScreen() {
         return false;
     }
@@ -160,6 +191,7 @@ public class VortexViewScreen extends Screen {
         }
 
         if (dematButton != null) {
+            canOrbit = landing != null && landed;
             dematButton.visible = landed;
             dematButton.active = landed && clickCooldown == 0;
         }
@@ -213,6 +245,8 @@ public class VortexViewScreen extends Screen {
         landing = packet;
         landingTicks = packet.parked() ? 200 : 0;
         landedTicks = 0;
+        camYaw = 0f;
+        camZoom = 1f;
     }
 
     private static boolean buried(LandingPacket p, BlockState[] states, int x, int y, int z) {
@@ -477,12 +511,12 @@ public class VortexViewScreen extends Screen {
             // Camera: starts wide, drifts in toward the TARDIS and slowly orbits it.
             float ease = Mth.clamp(lt / 160f, 0f, 1f);
             ease = ease * ease * (3f - 2f * ease);
-            float dist = Mth.lerp(ease, 9.5f, 6.0f);
+            float dist = Mth.lerp(ease, 9.5f, 6.0f) * camZoom;
             float eyeH = Mth.lerp(ease, 3.2f, 1.6f);
             // Start in front of the door (AiT's rotation points the door a quarter turn from the block's
             // facing), plus the player's own offset from the config, and a slow drift around it.
             float face = (float) Math.toRadians(landing.rotation() - 90f
-                    + VortexConfig.CAMERA_OFFSET_DEGREES.get() + 20f * Mth.sin(lt * 0.012f));
+                    + VortexConfig.CAMERA_OFFSET_DEGREES.get() + camYaw);
             float cx = 0.5f, cy = 1.0f, cz = 0.5f;
             float ex = cx + dist * Mth.sin(face);
             float ey = eyeH;
