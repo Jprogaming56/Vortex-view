@@ -85,6 +85,14 @@ public class VortexViewScreen extends Screen {
     private float camYaw;
     private float camZoom = 1f;
     private boolean canOrbit;
+    // Vortex flight state, advanced once per tick (see tick()).
+    private int fxTicks;
+    private float travelDist;
+    private float twist;
+    private float vortexSpin;
+    private float tardisYaw;
+    private float fov = 75f;
+    private float lightningFlash;
 
     public VortexViewScreen(Screen parent, Object tardis) throws Exception {
         super(Component.translatable("screen." + VortexViewMod.MOD_ID + ".title"));
@@ -179,6 +187,7 @@ public class VortexViewScreen extends Screen {
                 landing = null;
                 cells = List.of();
                 vortexAge = 0;
+                fxTicks = 0;
             } else {
                 if (landed) landedTicks++;
                 if (VortexConfig.CLOSE_AFTER_LANDING.get()
@@ -186,8 +195,9 @@ public class VortexViewScreen extends Screen {
                     onClose();
                 }
             }
-        } else if (vortexAge < 1000) {
-            vortexAge++;
+        } else {
+            if (vortexAge < 1000) vortexAge++;
+            tickFlight();
         }
 
         if (dematButton != null) {
@@ -195,6 +205,29 @@ public class VortexViewScreen extends Screen {
             dematButton.visible = landed;
             dematButton.active = landed && clickCooldown == 0;
         }
+    }
+
+    /** Advances the vortex flight by one tick: how far we have travelled, how fast things spin, thunder. */
+    private void tickFlight() {
+        float intensity = effectStrength();
+        VortexFx.Env e = VortexFx.envAt(fxTicks);
+        float before = fxTicks;
+        fxTicks++;
+        travelDist += 2.2f * e.speed();
+        twist += 0.006f * e.energy();
+        vortexSpin += 1.4f * e.energy();
+        tardisYaw += 3.1f * VortexConfig.SPIN_SPEED.get().floatValue() * e.energy();
+
+        if (VortexConfig.LIGHTNING.get() && VortexConfig.STRIKE_SOUNDS.get()
+                && VortexFx.directStrikeBetween(before, fxTicks, intensity)) {
+            Minecraft mc = Minecraft.getInstance();
+            mc.getSoundManager().play(net.minecraft.client.resources.sounds.SimpleSoundInstance.forUI(
+                    net.minecraft.sounds.SoundEvents.LIGHTNING_BOLT_THUNDER, 1.7f, 0.35f));
+        }
+    }
+
+    private static float effectStrength() {
+        return VortexConfig.EFFECTS.get().floatValue();
     }
 
     public void showEventNotice() {
@@ -320,6 +353,10 @@ public class VortexViewScreen extends Screen {
             g.fill(0, 0, width, height, ((int) (Mth.clamp(a, 0f, 1f) * 255) << 24) | 0xFFFFFF);
         }
 
+        if (landing == null && lightningFlash > 0.01f) {
+            g.fill(0, 0, width, height, ((int) (Mth.clamp(lightningFlash, 0f, 0.5f) * 255) << 24) | 0xE6F0FF);
+        }
+
         renderOverlay(g);
         super.render(g, mouseX, mouseY, partialTick);
     }
@@ -336,7 +373,7 @@ public class VortexViewScreen extends Screen {
 
         float aspect = (float) mc.getWindow().getWidth() / Math.max(1, mc.getWindow().getHeight());
         RenderSystem.setProjectionMatrix(
-                new Matrix4f().perspective((float) Math.toRadians(75.0), aspect, 0.05f, 3000f),
+                new Matrix4f().perspective((float) Math.toRadians(fov), aspect, 0.05f, 3000f),
                 VertexSorting.DISTANCE_TO_ORIGIN);
         RenderSystem.clear(GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
         RenderSystem.enableDepthTest();
@@ -365,29 +402,71 @@ public class VortexViewScreen extends Screen {
     // ---- vortex
 
     private void renderVortexScene(float partialTick) throws Exception {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return;
-        float t = mc.player.tickCount + partialTick;
+        float intensity = effectStrength();
+        float ft = fxTicks + partialTick;
+        VortexFx.Env env = VortexFx.envAt(ft);
+        float wobble = VortexConfig.WOBBLE.get().floatValue();
+        boolean lightning = VortexConfig.LIGHTNING.get();
+
+        // Where the ship is, and what lightning is doing to it right now.
+        float[] base = VortexFx.path(ft, wobble);
+        float[] jolt = lightning ? VortexFx.jolt(ft, intensity) : new float[5];
+        VortexFx.Ctx ctx = new VortexFx.Ctx();
+        ctx.t = ft;
+        ctx.dist = travelDist + 2.2f * env.speed() * partialTick;
+        ctx.twist = twist + 0.006f * env.energy() * partialTick;
+        ctx.baseX = base[0];
+        ctx.baseY = base[1];
+        ctx.tx = base[0] + jolt[0];
+        ctx.ty = base[1] + jolt[1];
+        ctx.tz = base[2];
+        ctx.wobble = wobble;
+        ctx.env = env;
+        ctx.intensity = intensity;
+        ctx.lightning = lightning;
+
+        lightningFlash = lightning && VortexConfig.LIGHTNING_FLASH.get() ? VortexFx.flash(ft, intensity) : 0f;
+
+        // Surges make the view widen like a ship hitting its stride.
+        float surge = Mth.clamp(env.speed() - 0.9f, 0f, 1f) * 12f
+                + 7f * (float) Math.pow(Math.max(0f, Mth.sin(ft * 0.0123f)), 6.0) + 5f * jolt[4];
+        fov = 75f + surge * Math.min(1f, intensity);
 
         in3D(() -> {
             PoseStack ps = new PoseStack();
 
-            // The whole shot sways a little, like a handheld camera in the show.
-            ps.mulPose(Axis.ZP.rotationDegrees(Mth.sin(t * 0.021f) * 5f));
-            ps.mulPose(Axis.XP.rotationDegrees(Mth.sin(t * 0.013f) * 3f));
-            ps.mulPose(Axis.YP.rotationDegrees(Mth.sin(t * 0.017f) * 3f));
+            // Camera: it banks through the turns, shakes with the turbulence and every lightning hit,
+            // and keeps glancing after the ship as it weaves from side to side.
+            float shake = (env.shake() * 0.07f + jolt[4] * 0.28f) * Math.min(1.5f, intensity);
+            ps.translate(shake * (Mth.sin(ft * 2.3f) + 0.6f * Mth.sin(ft * 5.1f)),
+                    shake * (Mth.sin(ft * 2.9f + 1f) + 0.6f * Mth.cos(ft * 4.3f)), 0f);
+            float roll = env.roll() * (Mth.sin(ft * 0.017f) + 0.6f * Mth.sin(ft * 0.043f + 1f));
+            ps.mulPose(Axis.ZP.rotationDegrees(roll + jolt[4] * 3f * Mth.sin(ft * 1.3f)));
+            ps.mulPose(Axis.YP.rotationDegrees((float) Math.toDegrees(Math.atan2(base[0], 7.0)) * 0.45f));
+            ps.mulPose(Axis.XP.rotationDegrees(-(float) Math.toDegrees(Math.atan2(base[1], 7.0)) * 0.45f));
 
             if (vortex != null) {
+                float spinNow = vortexSpin + 1.4f * env.energy() * partialTick;
                 ps.pushPose();
-                ps.mulPose(Axis.ZP.rotationDegrees(t * 1.4f));
+                ps.mulPose(Axis.ZP.rotationDegrees(spinNow));
                 ps.translate(0f, 0f, 500f);
                 AitBridge.call(vortex, "renderVortex", ps);
                 AitBridge.call(vortex, "renderVortexLayer", ps, 1.5f);
                 AitBridge.call(vortex, "renderVortexLayer", ps, 2.5f);
                 ps.popPose();
+                // A second, counter-turning layer makes the tunnel wall seem to slide past.
+                ps.pushPose();
+                ps.mulPose(Axis.ZP.rotationDegrees(-spinNow * 0.6f));
+                ps.translate(0f, 0f, 500f);
+                AitBridge.call(vortex, "renderVortexLayer", ps, 3.4f);
+                ps.popPose();
             }
 
-            if (model != null && texture != null) renderVortexTardis(ps, t, vortexTardisAlpha(partialTick));
+            VortexFx.drawBack(ps, ctx);
+            if (model != null && texture != null) {
+                renderVortexTardis(ps, ft, partialTick, ctx, jolt, base, vortexTardisAlpha(partialTick));
+            }
+            VortexFx.drawFront(ps, ctx);
         });
     }
 
@@ -417,31 +496,28 @@ public class VortexViewScreen extends Screen {
         return 360f * (done + eased);
     }
 
-    private void renderVortexTardis(PoseStack ps, float t, float alpha) throws Exception {
-        float spin = VortexConfig.SPIN_SPEED.get().floatValue();
+    private void renderVortexTardis(PoseStack ps, float t, float partialTick, VortexFx.Ctx ctx,
+                                    float[] jolt, float[] base, float alpha) throws Exception {
         float wobble = VortexConfig.WOBBLE.get().floatValue();
         boolean tumbles = VortexConfig.TUMBLES.get();
-
-        // Where it is: a lazy swooping path across the tunnel that also pushes in and out of
-        // the screen, so it seems to be hurtling along the vortex rather than hovering.
-        float x = wobble * (2.6f * Mth.sin(t * 0.027f) + 0.9f * Mth.sin(t * 0.071f + 0.6f));
-        float y = wobble * (1.5f * Mth.sin(t * 0.039f + 1.0f) + 0.5f * Mth.cos(t * 0.083f));
-        float z = -6.8f + wobble * 2.2f * Mth.sin(t * 0.019f);
+        float spinSetting = VortexConfig.SPIN_SPEED.get().floatValue();
+        VortexFx.Env env = ctx.env;
 
         // It leans into the sideways drift like a ship banking through a turn.
-        float vx = wobble * (2.6f * 0.027f * Mth.cos(t * 0.027f) + 0.9f * 0.071f * Mth.cos(t * 0.071f + 0.6f));
-        float bank = -vx * 160f;
+        float bank = -base[3] * 140f;
 
-        // How it points. In the show the TARDIS spins steadily about its own vertical axis
-        // while it rocks and nods through the vortex, and every so often it tumbles end over end.
-        float yaw = t * 3.1f * spin;
-        float nod = wobble * (21f * Mth.sin(t * 0.052f) + 7f * Mth.sin(t * 0.131f));
-        float rock = wobble * (15f * Mth.sin(t * 0.037f + 1.2f)) + bank;
+        // How it points. It spins steadily about its own vertical axis (faster in rougher zones), rocks
+        // and nods as it hurtles along, tumbles end over end every so often, and is thrown about
+        // whenever lightning hits it.
+        float yaw = tardisYaw + 3.1f * spinSetting * env.energy() * partialTick + jolt[2];
+        float nod = wobble * (21f * Mth.sin(t * 0.052f) + 7f * Mth.sin(t * 0.131f)) * (0.6f + 0.4f * env.energy())
+                + jolt[3];
+        float rock = wobble * (15f * Mth.sin(t * 0.037f + 1.2f)) * (0.6f + 0.4f * env.energy()) + bank;
         float flipX = tumbles ? flipAngle(t, 300f, 60f, 70f) : 0f;
         float flipZ = tumbles ? flipAngle(t, 520f, 75f, 260f) : 0f;
 
         ps.pushPose();
-        ps.translate(x, y, z);
+        ps.translate(ctx.tx, ctx.ty, ctx.tz);
         ps.mulPose(Axis.XP.rotationDegrees(nod + flipX));
         ps.mulPose(Axis.ZP.rotationDegrees(rock + flipZ));
         ps.mulPose(Axis.YP.rotationDegrees(yaw));
@@ -493,6 +569,7 @@ public class VortexViewScreen extends Screen {
     // ---- landing
 
     private void renderLandingScene(float partialTick) throws Exception {
+        fov = 75f;
         float lt = landingTicks + partialTick;
         float day = daylight();
         float[] horizon = skyHorizon();
@@ -550,6 +627,14 @@ public class VortexViewScreen extends Screen {
                 org.joml.Vector3f offset = (org.joml.Vector3f) AitBridge.call(travel, "getAnimationPosition", partialTick);
                 org.joml.Vector3f turn = (org.joml.Vector3f) AitBridge.call(travel, "getAnimationRotation", partialTick);
                 org.joml.Vector3f scale = (org.joml.Vector3f) AitBridge.call(travel, "getScale", partialTick);
+                // Once landed the box simply stands on the ground facing its block rotation, so the camera
+                // (which is worked out from that rotation) always ends up in front of the door.
+                if ("LANDED".equals(travelState())) {
+                    alpha = 1f;
+                    offset = new org.joml.Vector3f();
+                    turn = new org.joml.Vector3f();
+                    scale = new org.joml.Vector3f(1f, 1f, 1f);
+                }
 
                 RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
                 ps.pushPose();
@@ -665,6 +750,7 @@ public class VortexViewScreen extends Screen {
         try {
             Object travel = AitBridge.call(tardis, "travel");
             lines.add("STATE  " + AitBridge.call(travel, "getState"));
+            if (landing == null) lines.add("ZONE   " + VortexFx.envAt(fxTicks).name());
             lines.add("SPEED  " + AitBridge.call(travel, "speed"));
             lines.add("TRIP   " + AitBridge.call(travel, "getDurationAsPercentage") + "%");
             Object stab = AitBridge.call(AitBridge.call(tardis, "subsystems"), "stabilisers");

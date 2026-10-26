@@ -2,6 +2,22 @@
 
 Personal add-on for Adventures in Time on Minecraft 1.20.1 Forge (AIT Forger 1.0.4 / AIT 1.2.12).
 
+## The vortex itself
+
+The vortex is no longer a backdrop the TARDIS spins in front of; it is something it flies through.
+
+- Streaks of light rush past the camera, with glowing energy gates and big soft billows of energy streaming by,
+  and a bright glow at the end of the tunnel that everything is racing towards.
+- The TARDIS leaves a glowing wake along the path it has flown, weaves from side to side, surges, banks into
+  turns and tumbles, and the camera banks, shakes and widens (field of view) as it hits its stride.
+- Vortex lightning strikes it now and then. A direct hit throws it sideways, makes it spin and pitch, shakes
+  the camera, throws off sparks and gives a thunder rumble. Other bolts crawl along the tunnel wall.
+- The vortex moves through different zones, blending from one into the next about every 30 seconds:
+  TIME TUNNEL (cool blue), TEMPORAL STORM (violet, lots of lightning), GOLDEN EDDY (gold, many gates),
+  DEEP DRIFT (calm teal, slow) and TURBULENCE (red, fast, violent shaking). The zone name shows in the HUD.
+- Config: `vortexEffects` (0 to 2, strength of the travel effects), `vortexLightning`,
+  `vortexLightningFlash` (the brief screen flash, turn off if flashing bothers you) and `vortexThunder`.
+
 ## What it does
 - Adds a small **VORTEX** button to the AIT monitor (top of the left display, right of the TARDoS logo).
 - The button opens a full-screen view of your TARDIS:

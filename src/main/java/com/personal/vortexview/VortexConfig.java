@@ -10,6 +10,10 @@ public final class VortexConfig {
     public static final ForgeConfigSpec.DoubleValue SPIN_SPEED;
     public static final ForgeConfigSpec.DoubleValue WOBBLE;
     public static final ForgeConfigSpec.BooleanValue TUMBLES;
+    public static final ForgeConfigSpec.DoubleValue EFFECTS;
+    public static final ForgeConfigSpec.BooleanValue LIGHTNING;
+    public static final ForgeConfigSpec.BooleanValue LIGHTNING_FLASH;
+    public static final ForgeConfigSpec.BooleanValue STRIKE_SOUNDS;
     public static final ForgeConfigSpec.BooleanValue AUTO_LAND;
     public static final ForgeConfigSpec.IntValue AUTO_LAND_DELAY_TICKS;
     public static final ForgeConfigSpec.BooleanValue MUTE_EVENT_SOUNDS;
@@ -68,6 +72,19 @@ public final class VortexConfig {
         TUMBLES = b
                 .comment("Every so often the TARDIS does a full end-over-end tumble or barrel roll, like in the show's intros.")
                 .define("tardisTumbles", true);
+        EFFECTS = b
+                .comment("Strength of the vortex travel effects: light streaks, energy gates, billows, the wake behind the TARDIS.",
+                        "1.0 = default, 0 = none (just the plain vortex), up to 2.0 for more.")
+                .defineInRange("vortexEffects", 1.0, 0.0, 2.0);
+        LIGHTNING = b
+                .comment("Vortex lightning that strikes the TARDIS and throws it about.")
+                .define("vortexLightning", true);
+        LIGHTNING_FLASH = b
+                .comment("Brief screen flash when lightning strikes. Turn off if flashing bothers you.")
+                .define("vortexLightningFlash", true);
+        STRIKE_SOUNDS = b
+                .comment("A rumble of thunder when lightning hits the TARDIS.")
+                .define("vortexThunder", true);
         b.pop();
         SPEC = b.build();
     }
